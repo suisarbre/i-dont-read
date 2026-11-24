@@ -1,0 +1,51 @@
+{
+  "title": "Fix: install a browser",
+  "chapters": [
+    {
+      "title": "No browser to draw with",
+      "say": "I could not make your video yet. I need a browser, and here is the fix.",
+      "scenes": [
+        {
+          "type": "steps",
+          "heading": "Install a browser, then ask again",
+          "sub": "Every frame of the video is drawn in Chrome.",
+          "items": [
+            {
+              "title": "Install Google Chrome",
+              "detail": "google.com/chrome"
+            },
+            {
+              "title": "Or let Playwright fetch one",
+              "cmd": "python -m playwright install chromium"
+            },
+            {
+              "title": "Chrome in an unusual place?",
+              "detail": "Point IDR_CHROME at it",
+              "cmd": "export IDR_CHROME=/path/to/chrome"
+            }
+          ],
+          "beats": [
+            {
+              "say": "I draw every frame of the video in a Chrome browser, and I could not find one."
+            },
+            {
+              "say": "The simplest fix is to install Google Chrome.",
+              "reveal": 1
+            },
+            {
+              "say": "Or one command downloads a browser just for this.",
+              "reveal": 2
+            },
+            {
+              "say": "And if Chrome is installed somewhere unusual, tell me where it is.",
+              "reveal": 3
+            },
+            {
+              "say": "Then ask me again, and you will get your video."
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

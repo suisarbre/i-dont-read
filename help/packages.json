@@ -1,0 +1,43 @@
+{
+  "title": "Fix: install the Python packages",
+  "chapters": [
+    {
+      "title": "A few packages are missing",
+      "say": "I could not make your video yet. A few Python packages are missing, and here is the fix.",
+      "scenes": [
+        {
+          "type": "steps",
+          "heading": "Install the packages, then ask again",
+          "sub": "Run this from the i-dont-read folder.",
+          "items": [
+            {
+              "title": "Install everything at once",
+              "cmd": "pip install -r requirements.txt"
+            },
+            {
+              "title": "If pip refuses",
+              "detail": "Make a virtual environment first",
+              "cmd": "python -m venv .venv"
+            }
+          ],
+          "beats": [
+            {
+              "say": "The engine needs a few Python packages, and at least one of them is not installed."
+            },
+            {
+              "say": "One command installs them all.",
+              "reveal": 1
+            },
+            {
+              "say": "If pip refuses to install system wide, make a virtual environment first.",
+              "reveal": 2
+            },
+            {
+              "say": "Then ask me again, and you will get your video."
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import hashlib
-import os
 import sys
 import urllib.request
 from pathlib import Path
@@ -10,17 +9,13 @@ from pathlib import Path
 import numpy as np
 import soundfile as sf
 
-RELEASE = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0"
-MODEL = "kokoro-v1.0.onnx"   # full precision: faster on CPU than the int8 build
-VOICES = "voices-v1.0.bin"
+from .env import MODEL, RELEASE, VOICES, cache_dir
+
 SAMPLE_RATE = 24000
 
 
-def cache_dir() -> Path:
-    base = os.environ.get("IDR_CACHE") or Path.home() / ".cache" / "i-dont-read"
-    path = Path(base)
-    path.mkdir(parents=True, exist_ok=True)
-    return path
+class VoiceUnavailable(RuntimeError):
+    """The voice model is not on this machine and could not be downloaded."""
 
 
 def _fetch(name: str) -> Path:
@@ -29,7 +24,11 @@ def _fetch(name: str) -> Path:
         return dest
     print(f"[tts] downloading {name} (first run only)...", file=sys.stderr)
     part = dest.with_suffix(dest.suffix + ".part")
-    urllib.request.urlretrieve(f"{RELEASE}/{name}", part)
+    try:
+        urllib.request.urlretrieve(f"{RELEASE}/{name}", part)
+    except OSError as problem:
+        part.unlink(missing_ok=True)
+        raise VoiceUnavailable(f"could not download {name}: {problem}") from None
     part.rename(dest)
     return dest
 
