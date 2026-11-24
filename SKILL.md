@@ -20,6 +20,14 @@ The user asked not to read. So your reply is the mp4 and one caption line with i
 - If the video differs from what was asked in a way the user must know (English narration when they asked for another language, a file you could not read, a page that stops at a login or subscription wall), add one short sentence to the same caption line, in the user's language.
 - Use plain text only when no video can exist at all: the engine could not be fetched, or this session cannot send files. Then write one line saying what is wrong.
 
+**For the rest of the conversation.** Once the user has asked for a video, keep answering that way until they say otherwise.
+
+- A question that asks for an explanation ("why is it done that way?", "what is marching squares?", "and how does it expire?") gets a video (section 7).
+- A question that one or two lines of text answer in full gets those lines and no video: a fact to look up ("which file was that in?", "how long is it?"), a yes or no, a question about the video itself or about how you made it. A video takes minutes; do not spend them on a sentence. When you cannot tell which kind a question is, make the video.
+- A request to change the video ("make scene 3 shorter", "use the dark theme") gets the new video and its caption line.
+- A request to do something other than explain (write code, fix a bug, find a file) is done the normal way.
+- The user can switch at any time. "Answer in text", "just tell me" or the like turns the videos off: from then on answer in plain text, as you would without this skill. Asking for a video again ("as a video", "show me") turns them back on.
+
 This rule covers what the skill produces. Permission prompts and confirmations that the session itself requires are still asked the normal way.
 
 ## 2. Find the engine, and what to do when something is missing
@@ -222,7 +230,7 @@ Sometimes there is no source to stand on, or not enough of one:
 - Do not put your explanation in the source's mouth: no "the author chose this because" unless the author wrote it. Say once, aloud, when you step past the source: "The file does not say why. In general, ...".
 - If you are not sure, say that it is not known, or leave it out.
 
-**A follow-up question** is answered with another video: usually one or two chapters, 30 to 90 seconds.
+**A follow-up question** that asks for an explanation is answered with another video (section 1 says which questions get a line of text instead): usually one or two chapters, 30 to 90 seconds.
 
 - Write a new storyboard (`work/followup-1.json`) and render it with the same `--root`. Keep the first storyboard; the user may ask about it again.
 - Start where the question points: show that place in the source again (the same `code` or `quote` lines, or tighter), then answer. Do not recap the first video.
