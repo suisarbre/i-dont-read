@@ -61,7 +61,7 @@
             { "say": "A tall frame now centres the header and its block together, instead of leaving them at the top.", "highlight": [472, 473] },
             { "say": "It plugs in right after a scene is built, and it skips title cards.", "at": "skips title cards", "highlight": 474, "note": "not title cards" },
             { "say": "It measures the space left above the captions, and moves everything down by a little under half of it.",
-              "highlight": 477, "cues": [ { "at": "moves everything down", "highlight": 478, "note": "45% of the slack" } ] },
+              "highlight": 477, "cues": [ { "at": "moves everything down", "highlight": 478 } ] },
             { "say": "With sixty pixels of room or less, it leaves the layout alone.", "highlight": 478 }
           ]
         }

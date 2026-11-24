@@ -335,5 +335,75 @@ class Labels(unittest.TestCase):
             self.assertIn(why, str(caught.exception))
 
 
+class UnknownFields(unittest.TestCase):
+    """A field the engine does not know used to be dropped without a word, and the check said ok."""
+
+    def refused(self, scene, why):
+        with self.assertRaises(plan.StoryboardError) as caught:
+            build(scene)
+        self.assertIn(why, str(caught.exception))
+
+    def test_a_misspelt_field_on_a_mark_is_named(self):
+        self.refused(graph(expr="x^2", beats=[{"say": "one", "point": {"x": 1, "lable": "none"}}]), 'did you mean "label"?')
+        self.refused(graph(expr="x^2", beats=[{"say": "one", "move": {"from": -2, "to": 2, "side": "left"}}]),
+                     '"side" is not a field of "move"')
+        self.refused(graph(expr="x^2", y=[0, 9], beats=[{"say": "one", "riemann": {"from": 0, "to": 2, "n": 4, "side": "right"}}]),
+                     '"side" is not a field of "riemann"')
+
+    def test_so_is_one_on_a_curve_a_scene_or_a_beat(self):
+        self.refused(graph(curves=[{"expr": "x^2", "nmae": "f"}]), 'did you mean "name"?')
+        self.refused(graph(expr="x^2", ylable="height"), 'did you mean "ylabel"?')
+        self.refused(graph(expr="x^2", beats=[{"say": "one", "tangnet": {"x": 1}}]), 'did you mean "tangent"?')
+        self.refused(graph(expr="x^2", beats=[{"say": "one", "cues": [{"at": "one", "highlight": 3}]}]),
+                     '"highlight" is not a field of a cue in a plot scene')
+
+    def test_a_beat_in_any_scene_takes_only_what_that_scene_does(self):
+        flow = {"type": "flow", "heading": "h", "nodes": [{"label": "a"}, {"label": "b"}],
+                "beats": [{"say": "one", "reveal": 1, "highlght": 2}]}
+        self.refused(flow, '"highlght" is not a field of a beat in a flow scene')
+
+
+class CodeNotes(unittest.TestCase):
+    CODE = "def f(x):\n    return x\n\nprint(f(1))\n"
+
+    def ops(self, beats):
+        scene = {"type": "code", "heading": "h", "file": "a.py", "lines": [1, 4], "expect": "def f", "beats": beats}
+        return [op for op in build(scene, {"a.py": self.CODE})[0].payload["ops"] if op["op"] == "note"]
+
+    def test_a_note_goes_when_a_cue_moves_its_highlight_away(self):
+        ops = self.ops([{"say": "First this line, and then that one.", "highlight": 1, "note": "here",
+                         "cues": [{"at": "then that", "highlight": 2}]}])
+        self.assertEqual([op["text"] for op in ops], ["here", None])
+        self.assertGreater(ops[1]["t"], ops[0]["t"])
+
+    def test_a_cue_with_its_own_note_replaces_it(self):
+        ops = self.ops([{"say": "First this line, and then that one.", "highlight": 1, "note": "here",
+                         "cues": [{"at": "then that", "highlight": 2, "note": "there"}]}])
+        self.assertEqual([op["text"] for op in ops], ["here", "there"])
+
+
+class PartialPreviews(unittest.TestCase):
+    def test_looking_at_some_scenes_keeps_the_rest(self):
+        import json
+        board = {"title": "t", "source": "none", "chapters": [{"title": "c", "scenes": [
+            {"type": "flow", "heading": "one", "nodes": [{"label": "a"}, {"label": "b"}], "beats": [{"say": "one"}]},
+            {"type": "flow", "heading": "two", "nodes": [{"label": "c"}, {"label": "d"}], "beats": [{"say": "two"}]}]}]}
+        with tempfile.TemporaryDirectory() as tmp:
+            path, out = Path(tmp) / "b.json", Path(tmp) / "out"
+            path.write_text(json.dumps(board), encoding="utf-8")
+            quiet = io.StringIO()
+            with contextlib.redirect_stdout(quiet):
+                cli.main(["preview", str(path), "--out", str(out)])
+                whole = sorted(p.name for p in out.glob("*.png"))
+                frames = sorted(p.name for p in (out / ".work" / "preview" / "b").glob("*.png"))
+                cli.main(["preview", str(path), "--out", str(out), "--scenes", "3"])
+            self.assertEqual(whole, ["b_light_preview_1.png"])
+            self.assertEqual(sorted(p.name for p in out.glob("*.png")), ["b_light_preview_1.png", "b_light_preview_part_1.png"])
+            self.assertEqual(sorted(p.name for p in (out / ".work" / "preview" / "b").glob("*.png")), frames)
+            with contextlib.redirect_stdout(quiet):
+                cli.main(["preview", str(path), "--out", str(out)])          # a full preview clears the partial sheets
+            self.assertEqual(sorted(p.name for p in out.glob("*.png")), ["b_light_preview_1.png"])
+
+
 if __name__ == "__main__":
     unittest.main()

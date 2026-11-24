@@ -37,6 +37,38 @@ MAX_CURVES = 3
 MAX_CELL_CHARS = 40
 
 _NOT_ACTIONS = {"say", "speak", "hold", "cues", "at"}
+# What a beat or a cue may do in each kind of scene. Anything else is a slip of the hand (a misspelt field, or
+# one that belongs to another scene), and it would otherwise be dropped without a word.
+BEAT_ACTIONS = {"code": {"highlight", "note"}, "diff": {"highlight", "note", "show"}, "quote": {"mark"},
+                "image": {"zoom", "box"}, "flow": {"reveal", "focus"}, "compare": {"reveal"}, "stats": {"reveal"},
+                "steps": {"reveal"}, "math": {"reveal", "mark", "note"}, "table": {"reveal", "highlight", "note"},
+                "plot": {"reveal", "point", "tangent", "secant", "shade", "riemann", "arrow", "move", "stage", "sweep"}}
+
+
+def _only(given, allowed, what: str, where: str) -> None:
+    """Stop on a field that `what` does not take, naming the nearest one it does."""
+    import difflib
+    for key in given:
+        if key not in allowed:
+            near = difflib.get_close_matches(str(key), sorted(allowed), 1)
+            raise StoryboardError(f'{where}: "{key}" is not a field of {what}'
+                                  + (f'; did you mean "{near[0]}"?' if near else ".")
+                                  + f" It takes: {', '.join(sorted(allowed))}")
+
+
+def _check_beats(spec: dict, where: str) -> None:
+    kind = spec.get("type")
+    allowed = BEAT_ACTIONS.get(kind)
+    if allowed is None:
+        return
+    for beat in spec.get("beats") or []:
+        if not isinstance(beat, dict):
+            raise StoryboardError(f"{where}: a beat is an object such as {{\"say\": \"One sentence.\"}}, not {beat!r}")
+        _only(beat, allowed | _NOT_ACTIONS, f"a beat in a {kind} scene", where)
+        for cue in beat.get("cues") or []:
+            if not isinstance(cue, dict):
+                raise StoryboardError(f'{where}: a cue is an object such as {{"at": "a word", ...}}, not {cue!r}')
+            _only(cue, allowed | {"at"}, f"a cue in a {kind} scene", where)
 EXAMPLE_SUB = "Example written for this video"
 
 
@@ -323,6 +355,9 @@ def _lines(b: _Builder, scene: Scene, spec: dict, where: str, index: dict[int, i
                     if span:
                         scene.sfx.append((t, "tick"))
                     current = span
+                    if noted and not act.get("note"):   # the note was about the lines the highlight has just left
+                        ops.append({"op": "note", "t": t, "text": None})
+                        noted = False
             if act.get("note") and current:
                 ops.append({"op": "note", "t": t, "text": act["note"], "from": current[1], "to": current[2]})
                 noted = True
@@ -1033,6 +1068,19 @@ def _check_math(b: _Builder) -> list[str]:
 
 MOVE_STEPS = 96     # positions worked out along the way when a point travels
 DRAW = 1.1          # seconds a curve takes to draw itself (see player.js)
+PLOT_FIELDS = {"type", "heading", "sub", "beyond", "math", "beats", "expr", "name", "curves", "x", "y", "equal",
+               "asymptotes", "xticks", "yticks", "xlabel", "ylabel", "source"}
+# The fields of each kind of curve, keyed by the field that says which kind it is (looked for in this order).
+CURVE_FIELDS = {"equation": {"equation"}, "r": {"r", "theta"}, "stages": {"stages"}, "vary": {"expr", "vary", "name"},
+                "integral": {"integral", "from", "name"}, "t": {"x", "y", "t"}, "expr": {"expr", "name"}}
+_PLACED = {"x", "y", "t", "root", "max", "min", "meet", "near"}
+MARK_FIELDS = {"point": _PLACED | {"on", "as", "digits", "label", "side"},
+               "tangent": _PLACED | {"on", "as", "digits", "label", "side"},
+               "secant": {"x", "other", "approach", "seconds", "on", "as", "digits", "label", "side"},
+               "shade": {"from", "to", "between", "grow", "seconds", "on", "as", "digits", "label"},
+               "riemann": {"from", "to", "n", "rule", "on", "as", "digits", "label"},
+               "arrow": {"from", "to", "on"},
+               "move": {"from", "to", "tangent", "seconds", "on"}}
 MAX_STAGES = 8      # formulas one changing curve may move through
 MAX_RECTANGLES = 200
 # Commands KaTeX only draws as red error text here (they need trust), or that would restyle the page.
@@ -1061,8 +1109,13 @@ def _plot(b: _Builder, spec: dict, kicker: str) -> Scene:
             fail(f"{what} needs the smaller value first")
         return lo, hi, bool(lo_tex and "pi" in lo_tex or hi_tex and "pi" in hi_tex)
 
+    _only(spec, PLOT_FIELDS, "a plot scene", where)
     given = spec.get("curves") or ([{"expr": spec["expr"], "name": spec.get("name")}] if spec.get("expr") else [])
     given = [{"expr": c} if isinstance(c, str) else c for c in given]
+    for c in given:
+        if isinstance(c, dict):
+            kind = next((k for k in CURVE_FIELDS if k in c), "expr")
+            _only(c, CURVE_FIELDS[kind], f"a curve written with \"{kind}\"", where)
     if not 1 <= len(given) <= MAX_CURVES:
         fail(f'a plot scene draws 1 to {MAX_CURVES} curves ("expr", or "curves": [...]), not {len(given)}')
     if "x" not in spec:
@@ -1363,6 +1416,7 @@ def _plot(b: _Builder, spec: dict, kicker: str) -> Scene:
             for item in [value] if isinstance(value, dict) else value:
                 if not isinstance(item, dict) or not item:
                     fail(f'"{kind}" takes an object such as {example[kind]}, or a list of them; not {item!r}')
+                _only(item, MARK_FIELDS[kind], f'"{kind}"', where)
                 if kind == "shade" and "between" in item:
                     pair = item["between"]
                     if not (isinstance(pair, list) and len(pair) == 2 and all(isinstance(v, int) and not isinstance(v, bool)
@@ -1790,6 +1844,7 @@ def build(storyboard: dict, root: Path, theme: str, narrator, captions: bool = T
                 continue
             b.macros = texmath.Macros()
             try:
+                _check_beats(spec, spec.get("heading") or spec["type"])
                 scenes.append(make(b, spec, kicker))
                 scenes[-1].payload["beyond"] = beyond and not unsourced
             except KeyError as missing:

@@ -192,14 +192,19 @@
     while (font > 16 && lines.getBoundingClientRect().height - 2 * padY > room) apply(--font);
     // A wide frame never wraps, so measure: characters wider than a Latin letter (Hangul, kana, CJK,
     // emoji) make a line longer than its character count says.
-    const widest = () => Math.max(...rows.map(r => r.src.scrollWidth));
+    // The text itself: the box is a little wider on the right, to hold the overhang of a slanted last letter.
+    const inked = r => r.src.scrollWidth - parseFloat(getComputedStyle(r.src).paddingRight);
+    const widest = () => Math.max(...rows.map(inked));
     if (!tall) while (font > 14 && widest() > panelW - rows[0].src.offsetLeft - 12) apply(--font);
-    const box = rows.map(r => ({ top: r.row.offsetTop, h: r.row.offsetHeight, width: r.src.scrollWidth }));
+    const box = rows.map(r => ({ top: r.row.offsetTop, h: r.row.offsetHeight, width: inked(r) }));
     const gutter = rows[0].src.offsetLeft;
     enter(panel, t0 + 0.05, 34, 0.6);
 
-    // A note sits at the right edge of the panel, on rows whose code is short enough
-    // that the note covers nothing. If no such rows exist it straddles the panel's top edge.
+    // A note sits at the right edge of the panel, on highlighted rows whose code is short enough that the note
+    // covers nothing; failing that, on the top or bottom edge of the highlight, the way a tab sits on a folder
+    // (which for the first or last line is the edge of the panel). It never goes beside a line outside the
+    // highlight: there it would label the wrong code. With no room at all it goes to the top of the panel,
+    // where it covers nothing, and the check says it is not beside what it labels.
     const noteRight = 36;
     function noteTop(text, a, b) {
       note.textContent = text;
@@ -212,9 +217,14 @@
       const centre = i => box[i].top + (box[i].h - hgt) / 2;
       const tries = [(box[a].top + box[b].top + box[b].h) / 2 - hgt / 2];
       for (let i = a; i <= b; i++) tries.push(centre(i));
-      if (a > 0) tries.push(centre(a - 1));
-      if (b < n - 1) tries.push(centre(b + 1));
+      tries.push(box[a].top - hgt / 2, box[b].top + box[b].h - hgt / 2);
       for (const y of tries) if (clear(y)) return y;
+      if (a === 0) return -hgt / 2;                                          // on the panel's top edge, just above the first line
+      if (b === n - 1) return box[b].top + box[b].h + padY - hgt / 2;         // on its bottom edge, just below the last
+      const first = scene.rows[a].b || scene.rows[a].a, last = scene.rows[b].b || scene.rows[b].a;
+      problem(`the note "${text}" has no room beside ${a === b ? `line ${first}` : `lines ${first} to ${last}`}: the code there ` +
+        'runs to the right edge, so the note is drawn at the top of the code instead, away from what it labels. ' +
+        'Shorten the note, or put it on a beat that highlights a shorter line', true);
       return -hgt / 2;
     }
 
@@ -1035,7 +1045,8 @@
   // Things a builder could not fit on screen. They come back to the command line as warnings: a storyboard can
   // pass every check and still be too wide or too tall once it is laid out with real fonts.
   let problems = [];
-  const problem = text => { problems.push(text); };
+  // `minor` marks something that spoils nothing on screen but should be put right; the check warns instead of stopping.
+  const problem = (text, minor = false) => { problems.push((minor ? '~' : '') + text); };
 
   window.idr = {
     problems() { return problems; },

@@ -84,7 +84,7 @@ def _report(scenes: list, warnings: list[str], guessed: int = 0) -> float:
 def _fonts(missing: set[str], problems: list[str] = ()) -> None:
     """Say so when the machine cannot draw some of the characters on screen, or something did not fit."""
     for text in problems:
-        print(f"warning: {text}")
+        print(f"warning: {text.lstrip('~')}")
     if missing:
         shown = " ".join(sorted(missing)[:24])
         print(f"warning: this machine has no font for {len(missing)} character(s) on screen: {shown}\n"
@@ -122,15 +122,25 @@ def cmd_check(args) -> None:
         raise
     _report(scenes, warnings, getattr(narrator, "guessed", 0))
     misfits = _misfits(scenes, opts["format"])
+    sits_badly = [text[1:] for text in misfits if text.startswith("~")]
+    for text in sits_badly:
+        print(f"warning: {text}")
+    misfits = [text for text in misfits if not text.startswith("~")]
     if misfits:
         raise plan.StoryboardError("\n".join(misfits))
-    print("ok" if not warnings else f"ok, with {len(warnings)} warning(s)")
+    count = len(warnings) + len(sits_badly)
+    print("ok" if not count else f"ok, with {count} warning(s)")
 
 
 def _misfits(scenes, fmt: str) -> list[str]:
-    """Formulas and graphs that do not fit on screen. Only laying a scene out with the real fonts can tell, so
-    the scenes that hold math are built in the browser once, without filming them."""
-    laid_out = [scene for scene in scenes if scene.payload.get("type") in ("math", "plot")]
+    """Formulas, graphs and notes that do not fit on screen. Only laying a scene out with the real fonts can
+    tell, so the scenes that hold them are built in the browser once, without filming them. A line that starts
+    with "~" is a warning: nothing is cut off, but something sits badly."""
+    def worth(scene) -> bool:
+        kind = scene.payload.get("type")
+        return kind in ("math", "plot") or (kind in ("code", "diff") and any(
+            op.get("op") == "note" and op.get("text") for op in scene.payload.get("ops", [])))
+    laid_out = [scene for scene in scenes if worth(scene)]
     if not laid_out:
         return []
     try:
@@ -193,8 +203,14 @@ def cmd_preview(args) -> None:
     name = args.name or board_path.stem
     work = out / ".work" / "preview" / name               # one folder per storyboard: a follow-up keeps its own frames
     work.mkdir(parents=True, exist_ok=True)
-    for old in [*work.glob("*.png"), *out.glob(f"{name}_{_tag(opts)}_preview_*.png")]:
-        old.unlink()                                      # sheets from an earlier, longer run would pass for this one's
+    part = bool(args.scenes)
+    stem = f"{name}_{_tag(opts)}_preview_" + ("part_" if part else "")
+    # A look at a few scenes leaves the full set alone: its sheets are named "..._preview_part_N.png", and only
+    # the frames of those scenes are redrawn. A full preview replaces everything, so no sheet of an earlier,
+    # longer storyboard can pass for one of this run's.
+    for old in {*out.glob(f"{name}_{_tag(opts)}_preview_part_*.png"),
+                *([] if part else [*work.glob("*.png"), *out.glob(f"{name}_{_tag(opts)}_preview_*.png")])}:
+        old.unlink()
     narrator = plan.DryNarrator(opts["voice"], opts["speed"])
     scenes, warnings = plan.build(storyboard, root, opts["theme"], narrator, opts["captions"], opts["format"], opts["pronounce"], home)
     _report(scenes, warnings, narrator.guessed)
@@ -206,6 +222,8 @@ def cmd_preview(args) -> None:
                 continue
             moments = _moments(scene, args.beats)
             times = [t for t, _ in moments]
+            for old in [*work.glob(f"{i:02d}.png"), *work.glob(f"{i:02d}_*.png")]:
+                old.unlink()
             paths = [work / (f"{i:02d}_{k}.png" if len(times) > 1 else f"{i:02d}.png") for k in range(1, len(times) + 1)]
             studio.stills(scene, list(zip(times, paths)))
             for k, ((t, note), path) in enumerate(zip(moments, paths), 1):
@@ -228,7 +246,7 @@ def cmd_preview(args) -> None:
             box = draw.textbbox((0, 0), label, font=font)
             draw.rectangle((x + w - box[2] - 22, y + 8, x + w - 8, y + 34), fill="#30302e")
             draw.text((x + w - box[2] - 15, y + 11), label, fill="#faf9f5", font=font)
-        dest = out / f"{name}_{_tag(opts)}_preview_{n // per + 1}.png"
+        dest = out / f"{stem}{n // per + 1}.png"
         sheet.save(dest)
         print(f"[preview] {dest}  ({group[0][1].split('  ·  ')[0]} to {group[-1][1].split('  ·  ')[0]})")
     print(f"[preview] full-size frames: {work}")

@@ -22,7 +22,7 @@
             {
               "say": "First, it asks the page to draw itself at one exact moment, and the page answers a single question: did anything change?",
               "highlight": 77,
-              "note": "draw the frame at time t"
+              "note": "seek to t"
             },
             {
               "say": "Only when the picture changed does it take a new screenshot.",

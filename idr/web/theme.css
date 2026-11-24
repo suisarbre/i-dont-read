@@ -101,7 +101,8 @@ body { font-family: "IDR Sans", sans-serif; -webkit-font-smoothing: antialiased;
   font-variant-ligatures: none; font-feature-settings: "liga" 0, "calt" 0; }  /* show the source as typed: no => or != ligatures */
 .scene.code .ln { display: flex; white-space: pre; position: relative; }
 .scene.code .ln .no { flex: none; text-align: right; color: var(--mute); opacity: 0.75; user-select: none; }
-.scene.code .ln .src { overflow: hidden; text-overflow: ellipsis; }
+/* The padding keeps the overhang of a slanted last letter (a comment ends most lines that have one) inside the box that clips. */
+.scene.code .ln .src { overflow: hidden; text-overflow: ellipsis; padding-right: 0.35em; }
 .scene.code .ln.add { background: var(--add); }
 .scene.code .ln.del { background: var(--del); }
 .scene.code .ln .sign { text-align: center; font-weight: 600; opacity: 1; }

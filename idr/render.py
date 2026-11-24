@@ -92,8 +92,10 @@ class Studio:
         heading = scene.payload.get("heading")
         name = heading if isinstance(heading, str) else scene.payload.get("type", "scene")
         for text in self.page.evaluate("() => window.idr.problems()"):
-            if f"{name}: {text}" not in self.problems:
-                self.problems.append(f"{name}: {text}")
+            minor, text = text.startswith("~"), text.lstrip("~")     # "~": worth fixing, but nothing is cut off
+            line = f"{'~' if minor else ''}{name}: {text}"
+            if line not in self.problems:
+                self.problems.append(line)
 
 
 def join(parts: list[Path], dest: Path) -> None:
