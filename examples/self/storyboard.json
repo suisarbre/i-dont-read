@@ -10,37 +10,37 @@
           "heading": "The filming loop",
           "file": "idr/render.py",
           "lines": [
-            85,
-            96
+            66,
+            77
           ],
           "expect": "for i in range(scene.frames):",
           "beats": [
             {
               "say": "This loop is the heart of the renderer. It runs once for every frame of the scene.",
-              "highlight": 86
+              "highlight": 67
             },
             {
               "say": "First, it asks the page to draw itself at one exact moment, and the page answers a single question: did anything change?",
-              "highlight": 87,
+              "highlight": 68,
               "note": "draw the frame at time t"
             },
             {
               "say": "Only when the picture changed does it take a new screenshot.",
               "highlight": [
-                88,
-                90
+                69,
+                71
               ],
               "note": "capture only on change"
             },
             {
               "say": "Either way, a frame goes down the pipe to the encoder. A still moment just sends the same picture again.",
-              "highlight": 91
+              "highlight": 72
             },
             {
               "say": "When the encoder exits cleanly, the temporary file gets its real name, so a half finished render can never pass for a complete one.",
               "highlight": [
-                93,
-                95
+                74,
+                76
               ],
               "note": "rename only on success"
             }

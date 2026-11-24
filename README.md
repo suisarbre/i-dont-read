@@ -12,6 +12,7 @@ An agent skill that turns a codebase, a document, or any text into a short narra
 - **One idea per chapter.** Each idea gets its own chapter with a title card and a hard cut, and the mp4 carries real chapter markers.
 - **Length follows the content.** There is no fixed duration.
 - **Light and dark themes.**
+- **Video is the whole answer.** No summary under it, no outline to approve. When something is missing on the machine, even the fix arrives as a video.
 
 ## Install as a skill
 
@@ -35,11 +36,12 @@ The agent reads the source, splits it into chapters, and writes a storyboard: a 
 3. Draw each scene as an HTML page in headless Chrome and film it frame by frame.
 4. Mix narration and sound effects, then join the scenes.
 
-Scene types: `code`, `quote`, `flow`, `compare`, `stats`. `SKILL.md` documents the storyboard format.
+Scene types: `code`, `quote`, `flow`, `compare`, `stats`, `steps`. `SKILL.md` documents the storyboard format.
 
 ## Use the engine directly
 
 ```bash
+python -m idr doctor                                             # is this machine ready to render?
 python -m idr check   examples/self/storyboard.json --root .    # validate and estimate length
 python -m idr preview examples/self/storyboard.json --root .    # one frame per scene, to look at
 python -m idr render  examples/self/storyboard.json --root .    # make out/storyboard_light.mp4
@@ -48,6 +50,12 @@ python -m idr voices
 ```
 
 `examples/self` explains this repo with this repo. `examples/kokoro-onnx` explains [kokoro-onnx](https://github.com/thewh1teagle/kokoro-onnx), the voice library used here; clone that repo and pass it as `--root` (line numbers match its commit `3596b26`, and the render stops with a clear error if they have moved).
+
+## When something is missing
+
+`python -m idr doctor` checks the Python packages, ffmpeg, the browser and the voice model. For each problem it names a ready-made video in `help/` that explains the fix, and the skill sends that video instead of an error message. If only the voice model is unavailable, `render --silent` still makes a captioned video.
+
+The help videos are rendered from the storyboards beside them; `sh help/build.sh` rebuilds them.
 
 ## Settings
 

@@ -130,3 +130,17 @@ body { font-family: "IDR Sans", sans-serif; -webkit-font-smoothing: antialiased;
   font-variant-numeric: tabular-nums; }
 .scene.stats .label { font-size: 32px; font-weight: 500; line-height: 1.25; margin-top: 26px; }
 .scene.stats .note { font-size: 24px; line-height: 1.35; color: var(--mute); margin-top: 12px; }
+
+/* Numbered steps (also used for the chapter overview) */
+.scene.steps .list { position: absolute; left: 104px; right: 104px; }
+.scene.steps .items { display: flex; flex-direction: column; gap: 20px; }
+.scene.steps .item { display: flex; align-items: center; gap: 30px; background: var(--panel); border: 1.5px solid var(--line);
+  border-radius: 22px; padding: 24px 34px; }
+.scene.steps .idx { flex: none; width: 60px; height: 60px; border-radius: 50%; background: var(--ink); color: var(--bg);
+  font-size: 28px; font-weight: 600; display: flex; align-items: center; justify-content: center; }
+.scene.steps .text { flex: 1 1 auto; min-width: 0; }
+.scene.steps .title { font-family: "IDR Serif", serif; font-weight: 500; font-size: 40px; line-height: 1.15; }
+.scene.steps .detail { font-size: 26px; line-height: 1.35; color: var(--mute); margin-top: 6px; }
+.scene.steps .cmd { flex: none; font-family: "IDR Mono", monospace; font-size: 28px; white-space: nowrap; background: var(--bg);
+  border: 1.5px solid var(--line); border-radius: 12px; padding: 14px 22px;
+  font-variant-ligatures: none; font-feature-settings: "liga" 0, "calt" 0; }

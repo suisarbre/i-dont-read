@@ -7,36 +7,17 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
-import shutil
 import subprocess
 from pathlib import Path
 
 from playwright.sync_api import sync_playwright
 
+from .env import find_chrome
 from .plan import FPS, Scene
 
 WEB = Path(__file__).parent / "web"
 WIDTH, HEIGHT = 1920, 1080
 ENCODE = ["-c:v", "libx264", "-crf", "18", "-preset", "veryfast", "-pix_fmt", "yuv420p"]
-
-
-def find_chrome() -> str | None:
-    """A Chrome/Chromium already on this machine, or None to use Playwright's own."""
-    if os.environ.get("IDR_CHROME"):
-        return os.environ["IDR_CHROME"]
-    for name in ("google-chrome", "google-chrome-stable", "chromium", "chromium-browser", "chrome"):
-        found = shutil.which(name)
-        if found:
-            return found
-    for path in (
-        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-        r"C:\Program Files\Google\Chrome\Application\chrome.exe",
-        r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
-    ):
-        if Path(path).exists():
-            return path
-    return None
 
 
 def _player_version() -> str:

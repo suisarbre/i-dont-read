@@ -1,0 +1,55 @@
+{
+  "title": "Fix: install ffmpeg",
+  "chapters": [
+    {
+      "title": "One tool is missing",
+      "say": "I could not make your video yet. One tool is missing, and here is the fix.",
+      "scenes": [
+        {
+          "type": "steps",
+          "heading": "Install ffmpeg, then ask again",
+          "sub": "ffmpeg turns the frames I draw into a video file.",
+          "items": [
+            {
+              "title": "macOS",
+              "detail": "With Homebrew",
+              "cmd": "brew install ffmpeg"
+            },
+            {
+              "title": "Windows",
+              "detail": "With winget",
+              "cmd": "winget install ffmpeg"
+            },
+            {
+              "title": "Linux",
+              "detail": "Debian or Ubuntu",
+              "cmd": "sudo apt install ffmpeg"
+            }
+          ],
+          "beats": [
+            {
+              "say": "The missing tool is ffmpeg. It turns the frames I draw into a video file.",
+              "speak": "The missing tool is eff eff em peg. It turns the frames I draw into a video file."
+            },
+            {
+              "say": "On a Mac, install it with Homebrew.",
+              "reveal": 1
+            },
+            {
+              "say": "On Windows, use winget.",
+              "speak": "On Windows, use win get.",
+              "reveal": 2
+            },
+            {
+              "say": "On Linux, use your package manager.",
+              "reveal": 3
+            },
+            {
+              "say": "Then ask me again, and you will get your video."
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

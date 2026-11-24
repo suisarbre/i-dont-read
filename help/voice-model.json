@@ -1,0 +1,50 @@
+{
+  "title": "Fix: get the voice model",
+  "chapters": [
+    {
+      "title": "Why there is no voice",
+      "say": "Your video has no voice this time. Here is why, and how to fix it.",
+      "scenes": [
+        {
+          "type": "steps",
+          "heading": "The voice model could not be downloaded",
+          "sub": "About 350 MB, fetched once from a GitHub release.",
+          "items": [
+            {
+              "title": "Allow downloads from github.com",
+              "detail": "The model comes from a GitHub release"
+            },
+            {
+              "title": "Or fetch the two files yourself",
+              "detail": "kokoro-v1.0.onnx and voices-v1.0.bin"
+            },
+            {
+              "title": "Put them in this folder",
+              "cmd": "~/.cache/i-dont-read/"
+            }
+          ],
+          "beats": [
+            {
+              "say": "The voice is a model of about three hundred and fifty megabytes, downloaded once. This time, the download was blocked."
+            },
+            {
+              "say": "If you can, allow downloads from GitHub.",
+              "reveal": 1
+            },
+            {
+              "say": "Or download the two model files yourself,",
+              "reveal": 2
+            },
+            {
+              "say": "and put them in this folder.",
+              "reveal": 3
+            },
+            {
+              "say": "Until then, you get a silent version with captions."
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
