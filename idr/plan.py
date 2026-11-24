@@ -1101,15 +1101,22 @@ def _plot(b: _Builder, spec: dict, kicker: str) -> Scene:
             if "reveal" in act:
                 stage.upto(act["reveal"], t)
             mine = owner.get(id(src), [])
+            kept: dict[int, int] = {}
             for kind in shown:
                 if kind not in act and not (kind in ("point", "tangent") and "move" in act and any(k == kind for k, _ in mine)):
                     continue
-                for mid in shown[kind]:                # a new point, tangent or area replaces the ones of its kind
-                    if not any(m == mid for _, m in mine):
+                for mid in shown[kind]:                # a new point, tangent or area replaces the ones of its kind,
+                    twin = next((m for k, m in mine      # but one that is listed again as it was simply stays
+                                 if k == kind and m not in kept and m != mid and marks[m] == marks[mid]
+                                 and marks[m]["kind"] != "move"), None)
+                    if twin is not None:
+                        kept[twin] = mid
+                    elif not any(m == mid for _, m in mine):
                         ops.append({"op": "hide", "t": t, "mark": mid})
-                shown[kind] = [mid for k, mid in mine if k == kind]
-            started = set()
-            for j, (kind, mid) in enumerate(mine):
+                shown[kind] = [kept.get(mid, mid) for k, mid in mine if k == kind]
+            started = set(kept)
+            fresh = [(kind, mid) for kind, mid in mine if mid not in kept]
+            for j, (kind, mid) in enumerate(fresh):
                 if mid in started:
                     continue
                 started.add(mid)

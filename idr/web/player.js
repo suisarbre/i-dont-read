@@ -714,17 +714,33 @@
     // A label is an HTML box over the graph, so it can hold typeset math. It is kept inside the plot area.
     const at = svg.getBoundingClientRect(), base = wrap.getBoundingClientRect();
     const ox = at.left - base.left, oy = at.top - base.top;
-    const tag = (source, place) => {
+    // Two labels that are on screen together must not cover each other (points at the same x on two close
+    // curves): a later one steps down or up, a label's height at a time, until it is clear of the earlier ones.
+    const alive = scene.marks.map(() => [Infinity, Infinity]);
+    for (const op of scene.ops) {
+      if (op.op === 'show') alive[op.mark][0] = Math.min(alive[op.mark][0], op.t);
+      else if (op.op === 'hide') alive[op.mark][1] = op.t;
+    }
+    const placed = [];
+    const tag = (source, place, index) => {
       const node = wrap.appendChild(el('div', 'tag'));
       tex(node, source, false);
-      const box = node.getBoundingClientRect();
-      const [x, y] = place(box.width, box.height);
-      node.style.left = `${f2(ox + Math.min(Math.max(x, m.l + 6), m.l + pw - box.width - 6))}px`;
-      node.style.top = `${f2(oy + Math.min(Math.max(y, m.t + 6), m.t + ph - box.height - 6))}px`;
+      const box = node.getBoundingClientRect(), w = box.width, h = box.height;
+      const [wantX, wantY] = place(w, h);
+      const x = Math.min(Math.max(wantX, m.l + 6), m.l + pw - w - 6);
+      const inside = y => Math.min(Math.max(y, m.t + 6), m.t + ph - h - 6);
+      const [from, to] = alive[index];
+      const others = placed.filter(o => o.from < to && from < o.to);
+      const clear = y => others.every(o => o.x >= x + w + 4 || o.x + o.w + 4 <= x || o.y >= y + h + 4 || o.y + o.h + 4 <= y);
+      const tries = [0, 1, -1, 2, -2, 3, -3].map(k => inside(wantY) + k * (h + 6)).filter(y => y === inside(y));
+      const y = tries.find(clear) ?? inside(wantY);
+      placed.push({ x, y, w, h, from, to });
+      node.style.left = `${f2(ox + x)}px`;
+      node.style.top = `${f2(oy + y)}px`;
       return anim(node, { o: 0, s: 0.92 });
     };
     const fade = (node, to = 1) => track(0, v => { node.style.opacity = (v * to).toFixed(3); });
-    const marks = scene.marks.map(mk => {
+    const marks = scene.marks.map((mk, index) => {
       const cls = `c${mk.curve + 1}`;
       if (mk.kind === 'shade') {
         const floor = Math.min(Math.max(0, y0), y1);
@@ -732,7 +748,7 @@
         const a = mk.outline[0][0], b = mk.outline[mk.outline.length - 1][0];
         const area = make('path', { class: `shade ${cls}`, d: `M${f2(px(a))} ${f2(py(floor))} L${pts.join(' L')} L${f2(px(b))} ${f2(py(floor))} Z` }, shades);
         const mid = mk.outline[Math.floor(mk.outline.length / 2)];
-        const label = tag(mk.tex, (w, h) => [px((a + b) / 2) - w / 2, (py(mid[1]) + py(floor)) / 2 - h / 2]);
+        const label = tag(mk.tex, (w, h) => [px((a + b) / 2) - w / 2, (py(mid[1]) + py(floor)) / 2 - h / 2], index);
         return { parts: [fade(area)], label };
       }
       // A tangent is a line through (x, y) along the direction (dx, dy), long enough to leave the plot area.
@@ -788,13 +804,13 @@
         const dot = make('circle', { class: `dot ${cls}`, cx: f2(X), cy: f2(Y), r: 8 }, dots);
         // Under the line, beside the point of contact: a rising line leaves room below and to the right, a
         // falling one below and to the left. (A point's own label goes above and to the right.)
-        const label = tag(mk.tex, (w, h) => [rising ? X + 22 : X - 22 - w, Y + 16]);
+        const label = tag(mk.tex, (w, h) => [rising ? X + 22 : X - 22 - w, Y + 16], index);
         return { parts: [fade(line), fade(dot)], label };
       }
       const guide = make('path', { class: 'guide', d: `M${f2(X)} ${f2(axisY)} L${f2(X)} ${f2(Y)} L${f2(axisX)} ${f2(Y)}` }, over);
       const dot = make('circle', { class: `dot ${cls}`, cx: f2(X), cy: f2(Y), r: 0 }, dots);
       const grow = track(0, v => { dot.setAttribute('r', f2(v * 11)); });
-      const label = tag(mk.tex, (w, h) => [X + 18 + w > m.l + pw ? X - 18 - w : X + 18, Y - 18 - h < m.t ? Y + 18 : Y - 18 - h]);
+      const label = tag(mk.tex, (w, h) => [X + 18 + w > m.l + pw ? X - 18 - w : X + 18, Y - 18 - h < m.t ? Y + 18 : Y - 18 - h], index);
       return { parts: [fade(guide), grow], label };
     });
 

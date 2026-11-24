@@ -162,6 +162,15 @@ class Scenes(unittest.TestCase):
         travel = next(op for op in p["ops"] if op["op"] == "travel")
         self.assertGreaterEqual(p["ops"][-1]["t"], travel["t"] + travel["dur"])   # the next beat waits for it
 
+    def test_a_point_listed_again_stays(self):
+        p, _ = build(scene(curves=["sin(x)", "x - x^3/6"], y=[-2, 2], beats=[
+            {"say": "a", "point": {"x": 2, "on": 1}},
+            {"say": "b", "point": [{"x": 2, "on": 1}, {"x": 2, "on": 2}]},
+            {"say": "c", "point": {"x": 2, "on": 2}}]))
+        ops = [(op["op"], op["mark"]) for op in p["ops"] if op["op"] in ("show", "hide")]
+        # the sine's point is shown once and stays while the second joins it; then only the second is left
+        self.assertEqual(ops, [("show", 0), ("show", 2), ("hide", 0)])
+
     def test_more_refusals(self):
         for fields in [{"curves": [{"equation": "x^2 + y^2"}], "y": [-3, 3]},                          # no = sign
                        {"curves": [{"equation": "x^2 + y^2 = 4"}]},                                    # needs y
