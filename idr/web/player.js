@@ -650,8 +650,14 @@
     const svg = make('svg', { class: 'graph', width: W, height: H, viewBox: `0 0 ${W} ${H}` }, wrap);
     if (scene.credit) wrap.appendChild(el('div', 'credit', scene.credit));
     const m = { l: tall ? 84 : 104, r: 44, t: 44, b: 62 };
-    const pw = W - m.l - m.r, ph = H - m.t - m.b;
+    let pw = W - m.l - m.r, ph = H - m.t - m.b;
     const [x0, x1] = scene.x, [y0, y1] = scene.y;
+    if (scene.equal) {                                 // one unit is as long across as it is up: a circle is round
+      const unit = Math.min(pw / (x1 - x0), ph / (y1 - y0));
+      const w = unit * (x1 - x0), h = unit * (y1 - y0);
+      m.l += (pw - w) / 2; m.t += (ph - h) / 2;
+      pw = w; ph = h;
+    }
     const px = x => m.l + (x - x0) / (x1 - x0) * pw;
     const py = y => m.t + (y1 - y) / (y1 - y0) * ph;
     const f2 = v => v.toFixed(2);
@@ -661,18 +667,18 @@
     const back = make('g', {}, svg);
     for (const [v, label] of scene.xticks) {
       make('line', { class: 'grid', x1: f2(px(v)), x2: f2(px(v)), y1: m.t, y2: m.t + ph }, back);
-      make('text', { class: 'tick', x: f2(px(v)), y: m.t + ph + 38, 'text-anchor': 'middle' }, back).textContent = label;
+      make('text', { class: 'tick', x: f2(px(v)), y: f2(m.t + ph + 38), 'text-anchor': 'middle' }, back).textContent = label;
     }
     for (const [v, label] of scene.yticks) {
       make('line', { class: 'grid', x1: m.l, x2: m.l + pw, y1: f2(py(v)), y2: f2(py(v)) }, back);
-      make('text', { class: 'tick', x: m.l - 16, y: f2(py(v) + 8), 'text-anchor': 'end' }, back).textContent = label;
+      make('text', { class: 'tick', x: f2(m.l - 16), y: f2(py(v) + 8), 'text-anchor': 'end' }, back).textContent = label;
     }
     make('rect', { class: 'edge', x: m.l, y: m.t, width: pw, height: ph }, back);
     make('line', { class: 'axis', x1: m.l, x2: m.l + pw, y1: f2(axisY), y2: f2(axisY) }, back);
     make('line', { class: 'axis', x1: f2(axisX), x2: f2(axisX), y1: m.t, y2: m.t + ph }, back);
     // Axis names sit just outside the plot area, where no curve can run through them.
-    make('text', { class: 'axisname', x: m.l + pw + m.r / 2, y: f2(axisY + 9), 'text-anchor': 'middle' }, back).textContent = scene.xlabel;
-    make('text', { class: 'axisname', x: f2(axisX), y: m.t - 10, 'text-anchor': 'middle' }, back).textContent = scene.ylabel;
+    make('text', { class: 'axisname', x: f2(m.l + pw + 22), y: f2(axisY + 9), 'text-anchor': 'middle' }, back).textContent = scene.xlabel;
+    make('text', { class: 'axisname', x: f2(axisX), y: f2(m.t - 10), 'text-anchor': 'middle' }, back).textContent = scene.ylabel;
     enter(wrap, t0 + 0.05, 30, 0.6);
 
     const defs = make('defs', {}, svg);
@@ -681,14 +687,28 @@
     const shades = make('g', {}, inside), lines = make('g', {}, inside), over = make('g', {}, inside);
     const dots = make('g', {}, svg);
 
-    // Curves are drawn from left to right, the way one is sketched.
+    // A function of x is drawn from left to right, the way one is sketched. A curve that can turn back on
+    // itself (a circle, a spiral) is traced along its own length instead.
     const draw = scene.curves.map((c, i) => {
-      const wipe = make('rect', { x: m.l, y: m.t, width: 0, height: ph }, make('clipPath', { id: `plot-wipe-${i}` }, defs));
-      const g = make('g', { 'clip-path': `url(#plot-wipe-${i})`, class: `curve c${i + 1}` }, lines);
-      for (const line of c.lines) {
-        make('path', { d: line.map(([x, y], k) => `${k ? 'L' : 'M'}${f2(px(x))} ${f2(py(y))}`).join(' ') }, g);
+      const d = line => line.map(([x, y], k) => `${k ? 'L' : 'M'}${f2(px(x))} ${f2(py(y))}`).join(' ');
+      if (c.draw === 'wipe') {
+        const wipe = make('rect', { x: m.l, y: m.t, width: 0, height: ph }, make('clipPath', { id: `plot-wipe-${i}` }, defs));
+        const g = make('g', { 'clip-path': `url(#plot-wipe-${i})`, class: `curve c${i + 1}` }, lines);
+        for (const line of c.lines) make('path', { d: d(line) }, g);
+        return track(0, v => { wipe.setAttribute('width', f2(v * pw)); });
       }
-      return track(0, v => { wipe.setAttribute('width', f2(v * pw)); });
+      const g = make('g', { class: `curve c${i + 1}` }, lines);
+      const parts = c.lines.map(line => { const path = make('path', { d: d(line) }, g); return { path, len: path.getTotalLength() }; });
+      const total = parts.reduce((sum, p) => sum + p.len, 0) || 1;
+      return track(0, v => {
+        let before = 0;
+        for (const p of parts) {
+          const seen = Math.min(Math.max(v * total - before, 0), p.len);
+          p.path.style.visibility = seen > 0.01 ? 'visible' : 'hidden';
+          p.path.setAttribute('stroke-dasharray', `${f2(seen)} ${f2(p.len + 10)}`);
+          before += p.len;
+        }
+      });
     });
 
     // A label is an HTML box over the graph, so it can hold typeset math. It is kept inside the plot area.
@@ -715,14 +735,60 @@
         const label = tag(mk.tex, (w, h) => [px((a + b) / 2) - w / 2, (py(mid[1]) + py(floor)) / 2 - h / 2]);
         return { parts: [fade(area)], label };
       }
+      // A tangent is a line through (x, y) along the direction (dx, dy), long enough to leave the plot area.
+      const through = (line, x, y, dx, dy) => {
+        const ux = dx * pw / (x1 - x0), uy = -dy * ph / (y1 - y0), far = (pw + ph) * 2 / (Math.hypot(ux, uy) || 1);
+        line.setAttribute('x1', f2(px(x) - ux * far)); line.setAttribute('y1', f2(py(y) - uy * far));
+        line.setAttribute('x2', f2(px(x) + ux * far)); line.setAttribute('y2', f2(py(y) + uy * far));
+        return ux * uy <= 0;                           // true when the line rises to the right on screen
+      };
+      if (mk.kind === 'move') {
+        // A point that travels along the curve. plan.py worked out every position on the way; between two of
+        // them the dot moves in a straight line, and the numbers shown are those of the nearer one.
+        const steps = mk.steps, last = steps.length - 1;
+        const line = mk.tangent ? make('line', { class: 'tangent' }, over) : null;
+        const guide = make('path', { class: 'guide' }, over);
+        const dot = make('circle', { class: `dot ${cls}`, r: 11 }, dots);
+        const where = wrap.appendChild(el('div', 'tag live'));
+        const slope = mk.tangent ? wrap.appendChild(el('div', 'tag live')) : null;
+        const widest = (node, texts) => {              // as wide as its widest text, so it does not twitch
+          let w = 0, h = 0;
+          for (const text of texts) { node.textContent = text; const r = node.getBoundingClientRect(); w = Math.max(w, r.width); h = r.height; }
+          node.style.minWidth = `${Math.ceil(w)}px`;
+          return [Math.ceil(w), h];
+        };
+        const [ww, wh] = widest(where, steps.map(s => s[4]));
+        const [sw] = slope ? widest(slope, steps.map(s => s[5])) : [0];
+        const put = (node, x, y, w, h) => {
+          node.style.left = `${f2(ox + Math.min(Math.max(x, m.l + 6), m.l + pw - w - 6))}px`;
+          node.style.top = `${f2(oy + Math.min(Math.max(y, m.t + 6), m.t + ph - h - 6))}px`;
+        };
+        const go = track(0, v => {
+          const at = v * last, k = Math.min(Math.floor(at), last - 1), f = at - k;
+          const a = steps[k], b = steps[k + 1], near = steps[Math.round(at)];
+          const x = a[0] + (b[0] - a[0]) * f, y = a[1] + (b[1] - a[1]) * f;
+          const X = px(x), Y = py(y);
+          dot.setAttribute('cx', f2(X)); dot.setAttribute('cy', f2(Y));
+          guide.setAttribute('d', `M${f2(X)} ${f2(axisY)} L${f2(X)} ${f2(Y)} L${f2(axisX)} ${f2(Y)}`);
+          where.textContent = near[4];
+          put(where, X + 18 + ww > m.l + pw ? X - 18 - ww : X + 18, Y - 18 - wh < m.t ? Y + 18 : Y - 18 - wh, ww, wh);
+          if (line) {
+            const rising = through(line, x, y, a[2] + (b[2] - a[2]) * f, a[3] + (b[3] - a[3]) * f);
+            slope.textContent = near[5];
+            put(slope, rising ? X + 22 : X - 22 - sw, Y + 16, sw, wh);
+          }
+        });
+        const labels = [anim(where, { o: 0 }), ...(slope ? [anim(slope, { o: 0 })] : [])];
+        return { parts: [fade(guide), fade(dot), ...(line ? [fade(line)] : [])], labels, go };
+      }
       const X = px(mk.x), Y = py(mk.y);
       if (mk.kind === 'tangent') {
-        const line = make('line', { class: 'tangent', x1: f2(px(x0)), y1: f2(py(mk.y + mk.slope * (x0 - mk.x))),
-          x2: f2(px(x1)), y2: f2(py(mk.y + mk.slope * (x1 - mk.x))) }, over);
+        const line = make('line', { class: 'tangent' }, over);
+        const rising = through(line, mk.x, mk.y, mk.dx, mk.dy);
         const dot = make('circle', { class: `dot ${cls}`, cx: f2(X), cy: f2(Y), r: 8 }, dots);
         // Under the line, beside the point of contact: a rising line leaves room below and to the right, a
         // falling one below and to the left. (A point's own label goes above and to the right.)
-        const label = tag(mk.tex, (w, h) => [mk.slope >= 0 ? X + 22 : X - 22 - w, Y + 16]);
+        const label = tag(mk.tex, (w, h) => [rising ? X + 22 : X - 22 - w, Y + 16]);
         return { parts: [fade(line), fade(dot)], label };
       }
       const guide = make('path', { class: 'guide', d: `M${f2(X)} ${f2(axisY)} L${f2(X)} ${f2(Y)} L${f2(axisX)} ${f2(Y)}` }, over);
@@ -739,8 +805,12 @@
       } else if (op.op === 'show' || op.op === 'hide') {
         const mk = marks[op.mark], on = op.op === 'show' ? 1 : 0;
         mk.parts.forEach(p => p.to(op.t, on, on ? 0.45 : 0.25));
-        mk.label.o.to(op.t + (on ? 0.2 : 0), on, on ? 0.35 : 0.2);
-        mk.label.s.to(op.t + (on ? 0.2 : 0), on ? 1 : 0.92, 0.35);
+        for (const label of mk.labels || [mk.label]) {
+          label.o.to(op.t + (on ? 0.2 : 0), on, on ? 0.35 : 0.2);
+          if (!mk.labels) label.s.to(op.t + (on ? 0.2 : 0), on ? 1 : 0.92, 0.35);
+        }
+      } else if (op.op === 'travel') {
+        marks[op.mark].go.to(op.t, 1, op.dur, easeInOut);
       }
     }
   };

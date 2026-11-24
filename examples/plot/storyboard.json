@@ -1,5 +1,5 @@
 {
-  "title": "The slope of a curve",
+  "title": "Slopes, areas and circles",
   "chapters": [
     {
       "title": "A slope that changes",
@@ -13,9 +13,8 @@
           "x": [-3, 3],
           "beats": [
             { "say": "Here is f of x equals x squared.", "reveal": 1 },
-            { "say": "At x equals one, the curve is at height one.", "point": { "x": 1 } },
-            { "say": "The line that just touches it there has slope two.", "tangent": { "x": 1 } },
-            { "say": "Move to x equals two, and the slope doubles to four.", "at": "the slope doubles", "point": { "x": 2 }, "tangent": { "x": 2 } }
+            { "say": "At x equals one, the curve is at height one, and the line that just touches it there has slope two.", "point": { "x": 1 }, "cues": [ { "at": "the line that just touches", "tangent": { "x": 1 } } ] },
+            { "say": "Slide the point along the curve, and the slope changes with it, all the way from minus four to four.", "at": "Slide", "move": { "from": -2, "to": 2, "tangent": true } }
           ]
         },
         {
@@ -27,14 +26,43 @@
             { "say": "Plot that slope at every x, and you get a straight line: two x.", "reveal": 1, "cues": [ { "at": "a straight line", "reveal": 2 } ] },
             { "say": "And the area under that line, from zero to two, is four: the height the parabola reached.", "at": "from zero to two", "shade": { "from": 0, "to": 2, "on": 2 }, "point": { "x": 2, "on": 1 } }
           ]
+        }
+      ]
+    },
+    {
+      "title": "Waves and circles",
+      "say": "What about curves that are not y equals something?",
+      "scenes": [
+        {
+          "type": "plot",
+          "heading": "A sine wave, measured in pi",
+          "curves": [ "sin(x)", "cos(x)" ],
+          "x": ["-2*pi", "2*pi"],
+          "y": [-1.5, 1.5],
+          "beats": [
+            { "say": "When the x range is written in pi, the axis is marked in pi.", "reveal": 1 },
+            { "say": "The sine peaks at pi over two, exactly where the cosine crosses zero.", "reveal": 2, "point": [ { "x": "pi/2", "on": 1 }, { "x": "pi/2", "on": 2 } ] }
+          ]
+        },
+        {
+          "type": "plot",
+          "heading": "A circle and a spiral",
+          "curves": [ { "equation": "x^2 + y^2 = 4" }, { "x": "cos(3*t)*t/4", "y": "sin(3*t)*t/4", "t": [0, "2*pi"] } ],
+          "x": [-6, 6],
+          "y": [-2.4, 2.4],
+          "equal": true,
+          "source": "Drawn for this example",
+          "beats": [
+            { "say": "An equation in x and y draws every point where it holds: here, a circle of radius two.", "reveal": 1, "cues": [ { "at": "a circle", "tangent": { "x": 0, "y": 2 } } ] },
+            { "say": "And a curve given by a parameter can be traced, like this spiral.", "at": "can be traced", "reveal": 2, "tangent": null, "move": { "from": 0, "to": "2*pi", "on": 2, "seconds": 3 } }
+          ]
         },
         {
           "type": "plot",
           "heading": "Curves with gaps",
-          "curves": [ "1/x", "sin(x)", "sqrt(4 - x^2)" ],
+          "curves": [ "1/x", "tan(x)", "sqrt(4 - x^2)" ],
           "x": [-4, 4],
           "y": [-3, 3],
-          "source": "Drawn for this example",
           "beats": [
             { "say": "A curve is drawn only where its formula has a value, and never across a jump.", "reveal": 3 }
           ]

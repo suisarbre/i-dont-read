@@ -112,6 +112,76 @@ class Scenes(unittest.TestCase):
             with self.assertRaises(plan.StoryboardError, msg=str(fields)):
                 build(scene(**fields))
 
+    def test_numbers_may_be_written_with_pi(self):
+        p, _ = build(scene(expr="sin(x)", x=["-2*pi", "2*pi"], beats=[{"say": "a", "point": {"x": "pi/2"}}]))
+        self.assertAlmostEqual(p["x"][1], 2 * math.pi)
+        self.assertEqual([label for _, label in p["xticks"]],
+                         ["\u22122π", "\u22123π/2", "\u2212π", "\u2212π/2", "0", "π/2", "π", "3π/2", "2π"])
+        self.assertEqual(p["marks"][0]["tex"], r"\left(\frac{\pi}{2},\ 1\right)")
+        numbered, _ = build(scene(expr="sin(x)", x=["-2*pi", "2*pi"], xticks="numbers"))
+        self.assertEqual(numbered["xticks"][0][1], "\u22126")
+
+    def test_parameter_curve(self):
+        p, _ = build(scene(curves=[{"x": "2*cos(t)", "y": "2*sin(t)", "t": [0, "2*pi"]}], y=[-3, 3], beats=[
+            {"say": "a", "point": {"t": 0}, "tangent": {"t": "pi/2"}}]))
+        self.assertEqual(p["curves"][0]["draw"], "trace")
+        point, tangent = p["marks"]
+        self.assertEqual((point["x"], point["y"]), (2.0, 0.0))
+        self.assertEqual(tangent["tex"], r"\text{slope} = 0")
+        upright, _ = build(scene(curves=[{"x": "2*cos(t)", "y": "2*sin(t)", "t": [0, "2*pi"]}], y=[-3, 3],
+                                 beats=[{"say": "a", "tangent": {"t": 0}}]))
+        self.assertEqual(upright["marks"][0]["tex"], r"\text{vertical}")
+
+    def test_equation(self):
+        circle = plot.Implicit("x^2 + y^2 = 4")
+        lines = circle.strokes(-4, 4, -3, 3)
+        self.assertEqual(len(lines), 1)
+        self.assertEqual(lines[0][0], lines[0][-1])                         # a closed loop
+        for x, y in lines[0]:
+            self.assertAlmostEqual(math.hypot(x, y), 2.0, places=3)
+        self.assertEqual(len(plot.Implicit("x*y = 1").strokes(-4, 4, -3, 3)), 2)
+        self.assertEqual(len(plot.Implicit("y = tan(x)").strokes(-4, 4, -5, 5)), 3)   # no lines up the asymptotes
+        p, _ = build(scene(curves=[{"equation": "x^2 + y^2 = 4"}], y=[-3, 3], equal=True, beats=[
+            {"say": "a", "point": {"x": 0, "y": 2}, "tangent": {"x": "sqrt(2)", "y": "sqrt(2)"}}]))
+        self.assertTrue(p["equal"])
+        self.assertEqual(p["curves"][0]["tex"], "x^{2} + y^{2} = 4")
+        self.assertEqual(p["marks"][1]["tex"], r"\text{slope} = -1")
+
+    def test_travelling_point(self):
+        p, _ = build(scene(expr="x^2", beats=[{"say": "a", "move": {"from": -2, "to": 2, "tangent": True}},
+                                              {"say": "b", "point": {"x": 0}}]))
+        steps = p["marks"][0]["steps"]
+        self.assertEqual(len(steps), plan.MOVE_STEPS + 1)
+        self.assertEqual(steps[0][4:], ["(\u22122.00, 4.00)", "slope \u22124.00"])
+        self.assertEqual(steps[-1][4:], ["(2.00, 4.00)", "slope 4.00"])
+        for x, y, dx, dy, _, _ in steps:                                    # every position is on the curve
+            self.assertAlmostEqual(y, x * x, places=5)
+            self.assertAlmostEqual(dy / dx, 2 * x, places=5)
+        ops = [(op["op"], op["mark"]) for op in p["ops"] if op["op"] in ("show", "hide", "travel")]
+        self.assertEqual(ops, [("show", 0), ("travel", 0), ("hide", 0), ("show", 1)])
+        travel = next(op for op in p["ops"] if op["op"] == "travel")
+        self.assertGreaterEqual(p["ops"][-1]["t"], travel["t"] + travel["dur"])   # the next beat waits for it
+
+    def test_more_refusals(self):
+        for fields in [{"curves": [{"equation": "x^2 + y^2"}], "y": [-3, 3]},                          # no = sign
+                       {"curves": [{"equation": "x^2 + y^2 = 4"}]},                                    # needs y
+                       {"curves": [{"equation": "x^2 + y^2 = 4"}], "y": [-3, 3],
+                        "beats": [{"say": "a", "point": {"x": 1, "y": 1}}]},                           # not on it
+                       {"curves": [{"equation": "x^2 + y^2 = 4"}], "y": [-3, 3],
+                        "beats": [{"say": "a", "shade": {"from": 0, "to": 1}}]},
+                       {"curves": [{"equation": "x^2 + y^2 = 4"}], "y": [-3, 3],
+                        "beats": [{"say": "a", "move": {"from": 0, "to": 1}}]},
+                       {"curves": [{"x": "cos(t)", "t": [0, 1]}]},                                     # no y(t)
+                       {"curves": [{"x": "cos(t)", "y": "sin(u)", "t": [0, 1]}]},                      # unknown variable
+                       {"curves": [{"x": "cos(t)", "y": "sin(t)", "t": [0, 1]}],
+                        "beats": [{"say": "a", "point": {"t": 2}}]},                                   # outside t
+                       {"expr": "x^2", "x": ["-2*pi", "os"]},
+                       {"expr": "x^2", "xticks": "tau"},
+                       {"expr": "x^2", "beats": [{"say": "a", "move": {"from": 0, "to": 5}}]},          # leaves the graph
+                       {"expr": "1/x", "y": [-9, 9], "beats": [{"say": "a", "move": {"from": -1, "to": 1}}]}]:
+            with self.assertRaises(plan.StoryboardError, msg=str(fields)):
+                build(scene(**fields))
+
     def test_labels_are_checked_as_latex(self):
         p, _ = build(scene(curves=["exp(-x^2/2)/sqrt(2*pi)", "abs(x)^(1/3)", "floor(x) + log10(x + 4)"]))
         self.assertEqual(len(p["curves"]), 3)                           # build() fails on LaTeX KaTeX cannot parse

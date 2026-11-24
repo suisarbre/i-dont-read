@@ -35,11 +35,12 @@ _ALLOWED = "numbers, x, + - * / ^, parentheses, pi, e, tau and " + ", ".join(sor
 
 
 class Formula:
-    """One parsed expression in x."""
+    """One parsed expression in the given variables (x for an ordinary curve)."""
 
-    def __init__(self, text: str):
+    def __init__(self, text: str, variables: tuple[str, ...] = ("x",)):
+        self.variables = variables
         if not isinstance(text, str) or not text.strip():
-            raise ValueError("a curve needs an expression in x, such as \"x^2\"")
+            raise ValueError("a curve needs an expression, such as \"x^2\"")
         if len(text) > MAX_CHARS:
             raise ValueError(f"the expression is over {MAX_CHARS} characters")
         self.text = text.strip()
@@ -66,9 +67,10 @@ class Formula:
                 raise ValueError(f"{self.text!r}: {node.func.id} takes one argument")
             self._check(node.args[0])
         elif isinstance(node, ast.Name):
-            if node.id != "x" and node.id not in CONSTANTS:
-                raise ValueError(f"{self.text!r}: {node.id!r} is not known; the variable is x, and the constants "
-                                 "are pi, e and tau")
+            if node.id not in self.variables and node.id not in CONSTANTS:
+                names = " and ".join(self.variables) or "none here"
+                raise ValueError(f"{self.text!r}: {node.id!r} is not known; the variable is {names}, and the "
+                                 "constants are pi, e and tau")
         elif isinstance(node, ast.Constant) and type(node.value) in (int, float):
             pass
         else:
@@ -76,25 +78,27 @@ class Formula:
 
     # ---- values --------------------------------------------------------------------------------
 
-    def __call__(self, x):
-        """The value at x (a number or an array). Where the formula has no real value the result is nan."""
-        xs = np.asarray(x, dtype=float)
+    def __call__(self, *values):
+        """The value at the given variable values (numbers or arrays, in the order of `variables`).
+        Where the formula has no real value the result is nan."""
+        env = {name: np.asarray(v, dtype=float) for name, v in zip(self.variables, values)}
+        shape = np.broadcast(*env.values()).shape if env else ()
         with np.errstate(all="ignore"):
-            ys = np.asarray(self._value(self.node, xs), dtype=float) + np.zeros_like(xs)
+            ys = np.asarray(self._value(self.node, env), dtype=float) + np.zeros(shape)
         ys = np.where(np.isfinite(ys), ys, np.nan)
         return ys if ys.ndim else float(ys)
 
-    def _value(self, node, xs):
+    def _value(self, node, env):
         if isinstance(node, ast.Constant):
             return float(node.value)
         if isinstance(node, ast.Name):
-            return xs if node.id == "x" else CONSTANTS[node.id][0]
+            return env[node.id] if node.id in env else CONSTANTS[node.id][0]
         if isinstance(node, ast.UnaryOp):
-            value = self._value(node.operand, xs)
+            value = self._value(node.operand, env)
             return -value if isinstance(node.op, ast.USub) else value
         if isinstance(node, ast.Call):
-            return FUNCTIONS[node.func.id][0](self._value(node.args[0], xs))
-        a, b = self._value(node.left, xs), self._value(node.right, xs)
+            return FUNCTIONS[node.func.id][0](self._value(node.args[0], env))
+        a, b = self._value(node.left, env), self._value(node.right, env)
         if isinstance(node.op, ast.Add):
             return a + b
         if isinstance(node.op, ast.Sub):
@@ -142,7 +146,7 @@ class Formula:
         if isinstance(node, ast.Constant):
             return number(float(node.value))
         if isinstance(node, ast.Name):
-            return "x" if node.id == "x" else CONSTANTS[node.id][1]
+            return node.id if node.id in self.variables else CONSTANTS[node.id][1]
         if isinstance(node, ast.UnaryOp):
             inner = self._group(node.operand, self._rank(node.operand) < 2)
             return f"-{inner}" if isinstance(node.op, ast.USub) else inner
@@ -206,10 +210,28 @@ def ticks(lo: float, hi: float, about: int = 6) -> list[float]:
     return out
 
 
+def fixed(value: float) -> str:
+    """A number with two decimals and a real minus sign: for a label that changes while a point travels,
+    so its width holds still."""
+    text = f"{value:.2f}"
+    return minus("0.00" if text == "-0.00" else text)
+
+
+def slope_text(dx: float, dy: float, wide: float, high: float) -> str:
+    if abs(dx) * high < 1e-7 * abs(dy) * wide:
+        return "vertical"
+    return f"slope {fixed(dy / dx)}"
+
+
 def view(curves: list[Formula], x0: float, x1: float) -> tuple[float, float]:
-    """A y range that shows what the curves do over [x0, x1] without letting an asymptote flatten everything else."""
+    """A y range for functions of x over [x0, x1]."""
     xs = np.linspace(x0, x1, SAMPLES)
-    ys = np.concatenate([f(xs) for f in curves])
+    return view_of([f(xs) for f in curves])
+
+
+def view_of(heights: list) -> tuple[float, float]:
+    """A y range that shows what the curves do without letting an asymptote flatten everything else."""
+    ys = np.concatenate([np.asarray(h, dtype=float) for h in heights])
     ys = ys[np.isfinite(ys)]
     if not len(ys):
         raise ValueError("none of the curves has a value anywhere in the x range")
@@ -276,3 +298,198 @@ def strokes(f: Formula, x0: float, x1: float, y0: float, y1: float) -> list[list
     if len(current) > 1:
         lines.append(current)
     return lines
+
+
+def constant(value) -> tuple[float, str | None]:
+    """A number given as a number, or as an expression without variables such as "2*pi" or "pi/2".
+    Returns the value and, for an expression, its LaTeX (so a label can say pi/2 instead of 1.571)."""
+    if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+        raise ValueError(f"{value!r} is not a number; write a number, or an expression such as \"pi/2\"")
+    if isinstance(value, (int, float)):
+        return float(value), None
+    formula = Formula(value, ())
+    number_ = formula()
+    if number_ != number_:
+        raise ValueError(f"{value!r} has no value")
+    return float(number_), formula.tex()
+
+
+def pi_ticks(lo: float, hi: float, about: int = 8) -> list[tuple[float, str]]:
+    """Positions at round fractions of pi between lo and hi, with labels such as −π/2, π and 3π/2."""
+    span = (hi - lo) / math.pi
+    quarter = next((q for q in (1, 2, 4, 8, 16, 32) if span * 4 / q <= about), 64)     # step is quarter × π/4
+    first = math.ceil(lo / (math.pi / 4 * quarter) - 1e-9)
+    out = []
+    for k in range(first, first + 400):
+        n = k * quarter                                    # the tick is n × π/4
+        value = n * math.pi / 4
+        if value > hi + 1e-9:
+            break
+        g = math.gcd(abs(n), 4)
+        top, bottom = abs(n) // g, 4 // g
+        label = "0" if n == 0 else ("−" if n < 0 else "") + ("" if top == 1 else str(top)) + "π" \
+            + ("" if bottom == 1 else f"/{bottom}")
+        out.append((value, label))
+    return out
+
+
+class Function:
+    """y = f(x)."""
+    kind = "function"
+
+    def __init__(self, expr: str, name: str | None = None):
+        self.f, self.name = Formula(expr), name
+        self.text = self.f.text
+
+    def tex(self) -> str:
+        return f"{self.name}(x) = {self.f.tex()}" if self.name else f"y = {self.f.tex()}"
+
+    def heights(self, x0: float, x1: float):
+        return self.f(np.linspace(x0, x1, SAMPLES))
+
+    def strokes(self, x0, x1, y0, y1):
+        return strokes(self.f, x0, x1, y0, y1)
+
+    def at(self, x: float) -> tuple[float, float]:
+        return x, self.f(x)
+
+    def direction(self, x: float, span: float) -> tuple[float, float]:
+        return 1.0, self.f.slope(x, span)
+
+
+class Parametric:
+    """(x(t), y(t)) for t in a range."""
+    kind = "parametric"
+
+    def __init__(self, x: str, y: str, t0: float, t1: float):
+        self.fx, self.fy, self.t0, self.t1 = Formula(x, ("t",)), Formula(y, ("t",)), t0, t1
+        self.text = f"({self.fx.text}, {self.fy.text})"
+
+    def tex(self) -> str:
+        return rf"\left(x,\ y\right) = \left({self.fx.tex()},\ {self.fy.tex()}\right)"
+
+    def _path(self):
+        ts = np.linspace(self.t0, self.t1, SAMPLES)
+        return self.fx(ts), self.fy(ts)
+
+    def heights(self, x0: float, x1: float):
+        xs, ys = self._path()
+        return ys[(xs >= x0) & (xs <= x1)]
+
+    def strokes(self, x0, x1, y0, y1):
+        xs, ys = self._path()
+        wide, high = x1 - x0, y1 - y0
+        lines, current, previous = [], [], None
+        for x, y in zip(xs.tolist(), ys.tolist()):
+            if math.isnan(x) or math.isnan(y):
+                if len(current) > 1:
+                    lines.append(current)
+                current, previous = [], None
+                continue
+            if previous and (abs(x - previous[0]) > 2 * wide or abs(y - previous[1]) > 2 * high):
+                if len(current) > 1:
+                    lines.append(current)
+                current = []
+            current.append([round(min(max(x, x0 - wide), x1 + wide), 6), round(min(max(y, y0 - high), y1 + high), 6)])
+            previous = (x, y)
+        if len(current) > 1:
+            lines.append(current)
+        return lines
+
+    def at(self, t: float) -> tuple[float, float]:
+        return self.fx(t), self.fy(t)
+
+    def direction(self, t: float, span: float) -> tuple[float, float]:
+        h = (self.t1 - self.t0) * 1e-6
+        return float((self.fx(t + h) - self.fx(t - h)) / (2 * h)), float((self.fy(t + h) - self.fy(t - h)) / (2 * h))
+
+
+class Implicit:
+    """Every (x, y) where an equation such as x^2 + y^2 = 4 holds."""
+    kind = "implicit"
+
+    def __init__(self, equation: str):
+        if not isinstance(equation, str) or equation.count("=") != 1:
+            raise ValueError(f'an "equation" has one = sign, as in "x^2 + y^2 = 4"; not {equation!r}')
+        left, right = equation.split("=")
+        self.left, self.right = Formula(left, ("x", "y")), Formula(right, ("x", "y"))
+        self.text = equation.strip()
+
+    def tex(self) -> str:
+        return f"{self.left.tex()} = {self.right.tex()}"
+
+    def gap(self, x, y):
+        return self.left(x, y) - self.right(x, y)
+
+    def heights(self, x0: float, x1: float):
+        return np.array([])
+
+    def scale(self, x: float, y: float, wide: float, high: float) -> float:
+        """How fast the two sides move apart near (x, y): what "close to equal" has to be measured against."""
+        gx, gy = self.gradient(x, y, wide, high)
+        return math.hypot(gx * wide, gy * high)
+
+    def gradient(self, x: float, y: float, wide: float, high: float) -> tuple[float, float]:
+        hx, hy = wide * 1e-6, high * 1e-6
+        return (float((self.gap(x + hx, y) - self.gap(x - hx, y)) / (2 * hx)),
+                float((self.gap(x, y + hy) - self.gap(x, y - hy)) / (2 * hy)))
+
+    def strokes(self, x0, x1, y0, y1, nx: int = 360, ny: int = 220):
+        """The curve as polylines, found by marching squares: walk a grid, and wherever the two sides of the
+        equation swap which is larger between neighbouring grid points, the curve passes between them."""
+        xs, ys = np.linspace(x0, x1, nx + 1), np.linspace(y0, y1, ny + 1)
+        grid = self.gap(xs[None, :], ys[:, None])                      # grid[j, i] at (xs[i], ys[j])
+        finite = np.abs(grid[np.isfinite(grid)])
+        if not len(finite):
+            return []
+        typical = float(np.median(finite))                              # a jump across a pole is far above this
+
+        def cross(a: float, b: float) -> float:
+            return a / (a - b)                                          # where between two grid points the gap is zero
+
+        ends: dict[tuple, list[float]] = {}                             # a grid edge the curve crosses -> the point
+        links: dict[tuple, list[tuple]] = {}
+        for j in range(ny):
+            for i in range(nx):
+                a, b, c, d = grid[j, i], grid[j, i + 1], grid[j + 1, i + 1], grid[j + 1, i]
+                if a != a or b != b or c != c or d != d:
+                    continue
+                if min(abs(a), abs(b), abs(c), abs(d)) > typical:
+                    continue
+                found = []
+                if (a > 0) != (b > 0):
+                    found.append(("h", i, j, xs[i] + cross(a, b) * (xs[i + 1] - xs[i]), ys[j]))
+                if (b > 0) != (c > 0):
+                    found.append(("v", i + 1, j, xs[i + 1], ys[j] + cross(b, c) * (ys[j + 1] - ys[j])))
+                if (d > 0) != (c > 0):
+                    found.append(("h", i, j + 1, xs[i] + cross(d, c) * (xs[i + 1] - xs[i]), ys[j + 1]))
+                if (a > 0) != (d > 0):
+                    found.append(("v", i, j, xs[i], ys[j] + cross(a, d) * (ys[j + 1] - ys[j])))
+                if len(found) == 4:                                     # a saddle: pair the crossings by the centre's sign
+                    centre = (a + b + c + d) / 4
+                    found = [found[0], found[1], found[2], found[3]] if (centre > 0) == (a > 0) \
+                        else [found[0], found[3], found[1], found[2]]
+                for k in range(0, len(found) - 1, 2):
+                    p, q = found[k], found[k + 1]
+                    for one, other in ((p, q), (q, p)):
+                        ends[one[:3]] = [round(float(one[3]), 6), round(float(one[4]), 6)]
+                        links.setdefault(one[:3], []).append(other[:3])
+        lines, seen = [], set()
+        # Open lines first (they start at a crossing with one neighbour), then closed loops.
+        for start in sorted(links, key=lambda k: (len(links[k]) != 1, k)):
+            if start in seen:
+                continue
+            line, here, came = [ends[start]], start, None
+            seen.add(start)
+            while True:
+                onward = [n for n in links[here] if n != came and n not in seen]
+                if not onward:
+                    if len(links[here]) == 2 and start in links[here] and len(line) > 2:
+                        line.append(ends[start])                        # close the loop
+                    break
+                came, here = here, onward[0]
+                seen.add(here)
+                line.append(ends[here])
+            if len(line) > 1:
+                lines.append(line)
+        return lines

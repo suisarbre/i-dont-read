@@ -223,6 +223,7 @@ body { font-family: "IDR Sans", sans-serif; -webkit-font-smoothing: antialiased;
 .scene.plot .tag { position: absolute; background: var(--bg); border: 1.5px solid var(--line); border-radius: 12px; padding: 7px 16px;
   font-size: 30px; white-space: nowrap; box-shadow: 0 4px 14px rgba(0, 0, 0, 0.08); }
 .scene.plot .tag .katex { font-size: 1em; }
+.scene.plot .tag.live { font-family: "IDR Serif", serif; font-variant-numeric: tabular-nums; text-align: center; opacity: 0; }
 .scene.plot .credit { font-size: 24px; color: var(--mute); margin-top: 12px; }
 
 /* A real picture with a camera */

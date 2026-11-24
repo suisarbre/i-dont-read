@@ -875,113 +875,218 @@ def _check_math(b: _Builder) -> list[str]:
     return problems
 
 
+MOVE_STEPS = 96     # positions worked out along the way when a point travels
+
+
 def _plot(b: _Builder, spec: dict, kicker: str) -> Scene:
-    """The graph of one to three functions of x, with points, tangents and shaded areas computed from them."""
+    """Curves on a pair of axes: functions of x, parametric curves and equations in x and y, with points,
+    tangents, shaded areas and travelling points. Every number shown is worked out here from the formulas."""
     where = spec.get("heading") or "plot"
+
+    def fail(message: str):
+        raise StoryboardError(f"{where}: {message}")
+
+    def num(value, what: str) -> tuple[float, str | None]:
+        try:
+            return plot.constant(value)
+        except ValueError as problem:
+            fail(f"{what}: {problem}")
+
+    def span(value, what: str, example: str) -> tuple[float, float, bool]:
+        if not (isinstance(value, list) and len(value) == 2):
+            fail(f'{what} takes two values, the smaller first, as in {example}')
+        (lo, lo_tex), (hi, hi_tex) = num(value[0], what), num(value[1], what)
+        if not lo < hi:
+            fail(f"{what} needs the smaller value first")
+        return lo, hi, bool(lo_tex and "pi" in lo_tex or hi_tex and "pi" in hi_tex)
+
     given = spec.get("curves") or ([{"expr": spec["expr"], "name": spec.get("name")}] if spec.get("expr") else [])
     given = [{"expr": c} if isinstance(c, str) else c for c in given]
     if not 1 <= len(given) <= MAX_CURVES:
-        raise StoryboardError(f'{where}: a plot scene draws 1 to {MAX_CURVES} curves ("expr", or "curves": [...]), '
-                              f"not {len(given)}")
-    x = spec.get("x")
-    if not (isinstance(x, list) and len(x) == 2 and all(isinstance(v, (int, float)) for v in x) and x[0] < x[1]):
-        raise StoryboardError(f'{where}: a plot scene needs "x": [from, to], two numbers with the smaller first')
-    x0, x1 = float(x[0]), float(x[1])
+        fail(f'a plot scene draws 1 to {MAX_CURVES} curves ("expr", or "curves": [...]), not {len(given)}')
+    if "x" not in spec:
+        fail('a plot scene needs "x": [from, to], the part of the x axis to show')
+    x0, x1, x_pi = span(spec["x"], '"x"', '[-3, 3] or ["-2*pi", "2*pi"]')
+
+    shapes = []
     try:
-        formulas = [plot.Formula(c.get("expr")) for c in given]
-        if spec.get("y"):
-            y0, y1 = (float(v) for v in spec["y"])
-            if not y0 < y1:
-                raise ValueError('"y": [from, to] needs the smaller number first')
-        else:
-            y0, y1 = plot.view(formulas, x0, x1)
+        for c in given:
+            if not isinstance(c, dict):
+                fail('a curve is a formula in x, or an object with "expr", with "x", "y" and "t", or with "equation"')
+            if "equation" in c:
+                shapes.append(plot.Implicit(c["equation"]))
+            elif "t" in c:
+                if not ("x" in c and "y" in c):
+                    fail('a curve with "t" needs "x" and "y", two formulas in t')
+                t0, t1, _ = span(c["t"], 'a curve\'s "t"', '[0, "2*pi"]')
+                shapes.append(plot.Parametric(c["x"], c["y"], t0, t1))
+            else:
+                name = c.get("name")
+                if name is not None and not re.fullmatch(r"[A-Za-z]", str(name)):
+                    fail(f'a curve\'s "name" is one letter, as in f for f(x); not {name!r}')
+                shapes.append(plot.Function(c.get("expr"), name))
     except ValueError as problem:
-        raise StoryboardError(f"{where}: {problem}") from None
+        if isinstance(problem, StoryboardError):
+            raise
+        fail(str(problem))
+
+    y_pi = False
+    if spec.get("y"):
+        y0, y1, y_pi = span(spec["y"], '"y"', "[-2, 2]")
+    else:
+        heights = [h for shape in shapes for h in [shape.heights(x0, x1)] if len(h)]
+        if not heights:
+            fail('with only equations to draw, say which part of the y axis to show: "y": [from, to]')
+        try:
+            y0, y1 = plot.view_of(heights)
+        except ValueError as problem:
+            fail(str(problem))
+    wide, high = x1 - x0, y1 - y0
 
     curves = []
-    for n, (c, f) in enumerate(zip(given, formulas), 1):
-        name = c.get("name")
-        if name is not None and not re.fullmatch(r"[A-Za-z]", name):
-            raise StoryboardError(f'{where}: a curve\'s "name" is one letter, as in f for f(x); not {name!r}')
-        lines = plot.strokes(f, x0, x1, y0, y1)
-        if not any(y0 <= py <= y1 for line in lines for _, py in line):
-            raise StoryboardError(f"{where}: {f.text!r} is never inside the graph for x from {plot.number(x0)} to "
-                                  f'{plot.number(x1)}; change "x" or "y"')
-        label = f"{name}(x) = {f.tex()}" if name else f"y = {f.tex()}"
-        b.tex.append({"where": f"{where} curve {n}", "tex": label, "display": False, "seg": None, "strict": True})
-        curves.append({"tex": label, "lines": lines})
-
-    def curve(value: dict, what: str) -> int:
-        on = value.get("on", 1)
-        if not isinstance(on, int) or not 1 <= on <= len(curves):
-            raise StoryboardError(f'{where}: {what} is "on" curve {on!r}, but the scene has {len(curves)}')
-        return on - 1
-
-    def inside(i: int, at: float, what: str) -> float:
-        if not x0 <= at <= x1:
-            raise StoryboardError(f"{where}: {what} at x = {plot.number(at)} is outside the graph "
-                                  f"({plot.number(x0)} to {plot.number(x1)})")
-        value = formulas[i](at)
-        if value != value:
-            raise StoryboardError(f"{where}: {formulas[i].text!r} has no value at x = {plot.number(at)}")
-        if not y0 <= value <= y1:
-            raise StoryboardError(f"{where}: {what} at x = {plot.number(at)} is at y = {plot.number(value)}, outside "
-                                  f'the graph ({plot.number(y0)} to {plot.number(y1)}); set "y" to include it')
-        return float(value)
-
-    marks: list[dict] = []
-    owner: dict[int, list[tuple[str, int]]] = {}
+    for n, shape in enumerate(shapes, 1):
+        lines = shape.strokes(x0, x1, y0, y1)
+        if not any(x0 <= px <= x1 and y0 <= py <= y1 for line in lines for px, py in line):
+            fail(f'{shape.text!r} is never inside the graph (x from {plot.number(x0)} to {plot.number(x1)}, '
+                 f'y from {plot.number(y0)} to {plot.number(y1)}); change "x" or "y"')
+        b.tex.append({"where": f"{where} curve {n}", "tex": shape.tex(), "display": False, "seg": None, "strict": True})
+        curves.append({"tex": shape.tex(), "lines": lines, "draw": "wipe" if shape.kind == "function" else "trace"})
 
     def label(tex: str, what: str) -> str:
         b.tex.append({"where": f"{where} {what}", "tex": tex, "display": False, "seg": None, "strict": True})
         return tex
 
+    def on_curve(item: dict, what: str) -> int:
+        on = item.get("on", 1)
+        if not isinstance(on, int) or isinstance(on, bool) or not 1 <= on <= len(shapes):
+            fail(f'{what} is "on" curve {on!r}, but the scene has {len(shapes)}')
+        return on - 1
+
+    def place(i: int, item: dict, what: str, key: str | None = None) -> tuple[float, float, float, str | None]:
+        """Where on curve i an item sits: (x, y, parameter, LaTeX of an x that was written as an expression)."""
+        shape = shapes[i]
+        if shape.kind == "implicit":
+            if key or "x" not in item or "y" not in item:
+                fail(f'{what} on an equation needs both "x" and "y", a point the equation holds at')
+            (px, _), (py, _) = num(item["x"], what), num(item["y"], what)
+            gap, scale = shape.gap(px, py), shape.scale(px, py, wide, high)
+            if gap != gap or abs(gap) > 1e-6 * max(scale, 1e-12):
+                fail(f"{what}: ({plot.number(px)}, {plot.number(py)}) is not on {shape.text!r}")
+            param, written = px, None
+        else:
+            want = key or ("t" if shape.kind == "parametric" else "x")
+            if want not in item:
+                fail(f'{what} on this curve needs "{want}"' + (', the value of t there' if want == "t" else ""))
+            param, written = num(item[want], what)
+            if shape.kind == "parametric" and not shape.t0 - 1e-9 <= param <= shape.t1 + 1e-9:
+                fail(f"{what}: t = {plot.number(param)} is outside the curve's t range")
+            px, py = shape.at(param)
+            if px != px or py != py:
+                fail(f"{what}: {shape.text!r} has no value at {want} = {plot.number(param)}")
+            if shape.kind == "parametric":
+                written = None
+        if not (x0 - 1e-9 <= px <= x1 + 1e-9 and y0 - 1e-9 <= py <= y1 + 1e-9):
+            fail(f"{what} at ({plot.number(px)}, {plot.number(py)}) is outside the graph; change \"x\" or \"y\" to include it")
+        return float(px), float(py), float(param), written
+
+    def heading_of(i: int, px: float, py: float, param: float) -> tuple[float, float]:
+        """The direction the curve runs at a point, as (dx, dy)."""
+        shape = shapes[i]
+        if shape.kind == "implicit":
+            gx, gy = shape.gradient(px, py, wide, high)
+            dx, dy = gy, -gx
+        else:
+            dx, dy = shape.direction(param, wide)
+        if dx != dx or dy != dy or (abs(dx) < 1e-12 and abs(dy) < 1e-12):
+            fail(f"{shape.text!r} has no tangent at ({plot.number(px)}, {plot.number(py)})")
+        return float(dx), float(dy)
+
+    def slope_tex(dx: float, dy: float) -> str:
+        if abs(dx) * high < 1e-7 * abs(dy) * wide:
+            return r"\text{vertical}"
+        slope = dy / dx
+        return rf"\text{{slope}} {r'\approx' if plot.rounded(slope) else '='} {plot.number(slope)}"
+
+    def point_tex(px: float, py: float, written: str | None) -> str:
+        return rf"\left({written or plot.number(px)},\ {plot.number(py)}\right)"
+
+    marks: list[dict] = []
+    owner: dict[int, list[tuple[str, int]]] = {}
+    moves: dict[int, dict] = {}
+
     # Everything drawn on a curve is worked out from its formula here, never typed into the storyboard.
     for act in _actions(spec):
-        for kind in ("point", "tangent", "shade"):
+        for kind in ("point", "tangent", "shade", "move"):
             value = act.get(kind)
             if not value:
                 continue
             for item in [value] if isinstance(value, dict) else value:
                 if not isinstance(item, dict):
-                    raise StoryboardError(f'{where}: "{kind}" takes an object such as {{"x": 1}}, or a list of them')
-                i = curve(item, f"a {kind}")
-                f = formulas[i]
+                    fail(f'"{kind}" takes an object such as {{"x": 1}}, or a list of them')
+                i = on_curve(item, f"a {kind}")
+                shape = shapes[i]
                 if kind == "shade":
-                    if not all(isinstance(item.get(k), (int, float)) for k in ("from", "to")) or item["from"] >= item["to"]:
-                        raise StoryboardError(f'{where}: "shade" needs "from" and "to", two x values, smaller first')
-                    lo, hi = float(item["from"]), float(item["to"])
-                    inside(i, lo, "the shaded area"), inside(i, hi, "the shaded area")
-                    area = f.area(lo, hi)
+                    if shape.kind != "function":
+                        fail('"shade" fills the area under a function of x; this curve is not one')
+                    if "from" not in item or "to" not in item:
+                        fail('"shade" needs "from" and "to", two x values')
+                    lo, hi, _ = span([item["from"], item["to"]], '"shade"', '{"from": 0, "to": 2}')
+                    place(i, {"x": lo}, "the shaded area"), place(i, {"x": hi}, "the shaded area")
+                    area = shape.f.area(lo, hi)
                     if area != area:
-                        raise StoryboardError(f"{where}: {f.text!r} has no value somewhere between x = "
-                                              f"{plot.number(lo)} and {plot.number(hi)}, so there is no area to shade")
+                        fail(f"{shape.text!r} has no value somewhere between x = {plot.number(lo)} and "
+                             f"{plot.number(hi)}, so there is no area to shade")
                     xs = [lo + (hi - lo) * k / 160 for k in range(161)]
-                    ys = [min(max(v, y0), y1) for v in f(xs).tolist()]
+                    ys = [min(max(v, y0), y1) for v in shape.f(xs).tolist()]
                     sign = r"\approx" if plot.rounded(area) else "="
                     marks.append({"kind": "shade", "curve": i, "outline": [[round(a, 6), round(v, 6)] for a, v in zip(xs, ys)],
                                   "tex": label(rf"\text{{area}} {sign} {plot.number(area)}", "area")})
+                    owner.setdefault(id(act), []).append((kind, len(marks) - 1))
+                elif kind == "move":
+                    if shape.kind == "implicit":
+                        fail('"move" follows a function of x or a curve in t, not an equation')
+                    key = "t" if shape.kind == "parametric" else "x"
+                    if "from" not in item or "to" not in item:
+                        fail(f'"move" needs "from" and "to", two values of {key}')
+                    (start, _), (stop, _) = num(item["from"], '"move"'), num(item["to"], '"move"')
+                    if start == stop:
+                        fail('"move" needs "from" and "to" to differ')
+                    steps = []
+                    for k in range(MOVE_STEPS + 1):
+                        at = start + (stop - start) * k / MOVE_STEPS
+                        px, py, param, _ = place(i, {key: at}, "the travelling point", key)
+                        dx, dy = heading_of(i, px, py, param) if item.get("tangent") else (0.0, 0.0)
+                        steps.append([round(px, 6), round(py, 6), dx, dy,
+                                      f"({plot.fixed(px)}, {plot.fixed(py)})",
+                                      plot.slope_text(dx, dy, wide, high) if item.get("tangent") else ""])
+                    marks.append({"kind": "move", "curve": i, "steps": steps, "tangent": bool(item.get("tangent"))})
+                    moves[len(marks) - 1] = item
+                    owner.setdefault(id(act), []).append(("point", len(marks) - 1))
+                    if item.get("tangent"):
+                        owner[id(act)].append(("tangent", len(marks) - 1))
                 else:
-                    if not isinstance(item.get("x"), (int, float)):
-                        raise StoryboardError(f'{where}: "{kind}" needs "x", the place on the curve')
-                    at = float(item["x"])
-                    value_y = inside(i, at, f"the {kind}")
+                    px, py, param, written = place(i, item, f"the {kind}")
                     if kind == "point":
-                        marks.append({"kind": "point", "curve": i, "x": at, "y": value_y,
-                                      "tex": label(rf"\left({plot.number(at)},\ {plot.number(value_y)}\right)", "point")})
+                        marks.append({"kind": "point", "curve": i, "x": px, "y": py,
+                                      "tex": label(point_tex(px, py, written), "point")})
                     else:
-                        slope = f.slope(at, x1 - x0)
-                        if slope != slope:
-                            raise StoryboardError(f"{where}: {f.text!r} has no slope at x = {plot.number(at)}")
-                        sign = r"\approx" if plot.rounded(slope) else "="
-                        marks.append({"kind": "tangent", "curve": i, "x": at, "y": value_y, "slope": slope,
-                                      "tex": label(rf"\text{{slope}} {sign} {plot.number(slope)}", "slope")})
-                owner.setdefault(id(act), []).append((kind, len(marks) - 1))
+                        dx, dy = heading_of(i, px, py, param)
+                        marks.append({"kind": "tangent", "curve": i, "x": px, "y": py, "dx": dx, "dy": dy,
+                                      "tex": label(slope_tex(dx, dy), "slope")})
+                    owner.setdefault(id(act), []).append((kind, len(marks) - 1))
 
+    def axis_ticks(lo: float, hi: float, about: int, in_pi: bool, choice) -> list[list]:
+        if choice not in (None, "pi", "numbers"):
+            fail('"xticks" and "yticks" are "pi" or "numbers"')
+        if choice == "pi" or (in_pi and choice != "numbers"):
+            return [[v, text] for v, text in plot.pi_ticks(lo, hi, about)]
+        return [[v, plot.minus(plot.number(v))] for v in plot.ticks(lo, hi, about)]
+
+    is_wide = b.fmt == "wide"
     on = _math_on(b, spec)
-    scene = b.scene("plot", kicker, spec, x=[x0, x1], y=[y0, y1], curves=curves, marks=marks,
-                    xticks=[[v, plot.minus(plot.number(v))] for v in plot.ticks(x0, x1, 10 if b.fmt == "wide" else 6)],
-                    yticks=[[v, plot.minus(plot.number(v))] for v in plot.ticks(y0, y1, 7 if b.fmt == "wide" else 9)],
+    scene = b.scene("plot", kicker, spec, x=[x0, x1], y=[y0, y1], curves=curves, marks=marks, equal=bool(spec.get("equal")),
+                    xticks=axis_ticks(x0, x1, 10 if is_wide else 6, x_pi, spec.get("xticks")),
+                    yticks=axis_ticks(y0, y1, 7 if is_wide else 9, y_pi, spec.get("yticks")),
                     xlabel=spec.get("xlabel", "x"), ylabel=spec.get("ylabel", "y"),
                     credit=b.rich(spec.get("source"), on, where))
     scene.sfx.append((0.0, "whoosh"))
@@ -990,21 +1095,37 @@ def _plot(b: _Builder, spec: dict, kicker: str) -> Scene:
     stage = _Stage(scene, len(curves), "curve", _staged(spec))
     shown: dict[str, list[int]] = {"point": [], "tangent": [], "shade": []}
     for beat in spec.get("beats", []):
-        for t, act, src in clock.beat(beat):
+        timed = clock.beat(beat)
+        spoken_until = clock.t - GAP                    # when this beat's sentence ends
+        for t, act, src in timed:
             if "reveal" in act:
                 stage.upto(act["reveal"], t)
+            mine = owner.get(id(src), [])
             for kind in shown:
-                if kind not in act:
+                if kind not in act and not (kind in ("point", "tangent") and "move" in act and any(k == kind for k, _ in mine)):
                     continue
                 for mid in shown[kind]:                # a new point, tangent or area replaces the ones of its kind
-                    ops.append({"op": "hide", "t": t, "mark": mid})
-                shown[kind] = [mid for k, mid in owner.get(id(src), []) if k == kind]
-                for j, mid in enumerate(shown[kind]):
-                    if marks[mid]["curve"] >= stage.visible:
-                        b.warn(where, f"a {kind} is on curve {marks[mid]['curve'] + 1} before that curve is revealed")
-                    at = round(t + 0.12 + j * 0.3, 3)
-                    ops.append({"op": "show", "t": at, "mark": mid})
-                    scene.sfx.append((at, "mark" if kind == "shade" else "tick"))
+                    if not any(m == mid for _, m in mine):
+                        ops.append({"op": "hide", "t": t, "mark": mid})
+                shown[kind] = [mid for k, mid in mine if k == kind]
+            started = set()
+            for j, (kind, mid) in enumerate(mine):
+                if mid in started:
+                    continue
+                started.add(mid)
+                if marks[mid]["curve"] >= stage.visible:
+                    b.warn(where, f"a {marks[mid]['kind']} is on curve {marks[mid]['curve'] + 1} before that curve is revealed")
+                at = round(t + 0.12 + (j * 0.3 if marks[mid]["kind"] != "move" else 0), 3)
+                ops.append({"op": "show", "t": at, "mark": mid})
+                scene.sfx.append((at, "mark" if kind == "shade" else "tick"))
+                if marks[mid]["kind"] == "move":
+                    item = moves[mid]
+                    seconds = item.get("seconds")
+                    if seconds is not None and not (isinstance(seconds, (int, float)) and 0.5 <= seconds <= 20):
+                        fail('"move": "seconds" is a number from 0.5 to 20')
+                    travel = float(seconds) if seconds else max(1.5, spoken_until - at - 0.5)
+                    ops.append({"op": "travel", "t": round(at + 0.35, 3), "mark": mid, "dur": round(travel, 3)})
+                    clock.t = max(clock.t, at + 0.35 + travel + GAP)      # the scene waits for the point to arrive
     stage.upto(len(curves), clock.t)
     first = min((op["t"] for op in ops if op["op"] == "reveal"), default=0.0)
     if first > LEAD + 1.0:
