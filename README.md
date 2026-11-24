@@ -4,7 +4,7 @@
 
 An agent skill that turns a codebase, a document, or any text into a short narrated explainer video.
 
-> Status: early work in progress. Nothing here is usable yet.
+> Status: early work in progress. The render engine works for one sample; the skill itself is not written yet.
 
 ## What it will do
 
@@ -23,6 +23,26 @@ An agent skill that turns a codebase, a document, or any text into a short narra
 4. Time the visuals to the actual audio.
 5. Film each chapter as an HTML scene in headless Chrome and encode it with ffmpeg.
 6. Mix in sound effects and join the chapters.
+
+## Try the sample
+
+```bash
+pip install -r requirements.txt
+python -m idr render examples/self/storyboard.json --root . --out out            # light
+python -m idr render examples/self/storyboard.json --root . --out out --theme dark
+```
+
+The sample explains this repo's own filming loop. The first run downloads the voice model (about 350 MB) into `~/.cache/i-dont-read`.
+
+Add `--stills` to draw a few preview frames instead of filming.
+
+## Settings
+
+Theme and voice are picked in this order: command line flag, then the storyboard, then a `.i-dont-read.json` file in the project root, then the defaults (`light`, `af_heart`).
+
+```json
+{ "theme": "dark", "voice": "af_heart" }
+```
 
 ## Requirements
 

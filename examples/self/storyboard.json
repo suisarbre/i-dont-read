@@ -1,0 +1,62 @@
+{
+  "title": "How i-dont-read films a scene",
+  "chapters": [
+    {
+      "title": "How a scene gets filmed",
+      "say": "How does a web page become a video? One frame at a time.",
+      "scenes": [
+        {
+          "type": "code",
+          "heading": "The filming loop",
+          "file": "idr/render.py",
+          "lines": [85, 96],
+          "expect": "for i in range(scene.frames):",
+          "beats": [
+            {
+              "say": "This loop is the heart of the renderer. It runs once for every frame of the scene.",
+              "highlight": 86
+            },
+            {
+              "say": "First, it asks the page to draw itself at one exact moment, and the page answers a single question: did anything change?",
+              "highlight": 87,
+              "note": "draw the frame at time t"
+            },
+            {
+              "say": "Only when the picture changed does it take a new screenshot.",
+              "highlight": [88, 90],
+              "note": "capture only on change"
+            },
+            {
+              "say": "Either way, a frame goes down the pipe to the encoder. A still moment just sends the same picture again.",
+              "highlight": 91
+            },
+            {
+              "say": "When the encoder exits cleanly, the temporary file gets its real name, so a half finished render can never pass for a complete one.",
+              "highlight": [93, 95],
+              "note": "rename only on success"
+            }
+          ]
+        },
+        {
+          "type": "flow",
+          "heading": "From storyboard to video",
+          "nodes": [
+            { "label": "Storyboard", "desc": "Chapters, sentences, and what to show" },
+            { "label": "Voice", "desc": "One clip per sentence, made locally" },
+            { "label": "Timeline", "desc": "Each beat lasts as long as its sentence" },
+            { "label": "Film", "desc": "Chrome draws, the encoder records" },
+            { "label": "Mix", "desc": "Narration plus sound effects" }
+          ],
+          "beats": [
+            { "say": "Zooming out, filming is one of five steps. It starts with a storyboard: the chapters, the sentences, and what to show for each.", "reveal": 1, "focus": 1 },
+            { "say": "Every sentence is spoken by a voice model that runs locally. No account or key is needed.", "reveal": 2, "focus": 2 },
+            { "say": "The length of each spoken clip sets the timeline, so the picture always follows the voice.", "reveal": 3, "focus": 3 },
+            { "say": "Then each scene is filmed, the way you just saw.", "reveal": 4, "focus": 4 },
+            { "say": "Finally, narration and sound effects are mixed in, and the chapters are joined.", "reveal": 5, "focus": 5 },
+            { "say": "That is the whole pipeline. Don't read. Just watch." }
+          ]
+        }
+      ]
+    }
+  ]
+}
