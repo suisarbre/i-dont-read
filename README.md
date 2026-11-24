@@ -46,9 +46,11 @@ Scene types: `code`, `diff`, `quote`, `image`, `flow`, `compare`, `stats`, `step
 python -m idr doctor                                             # is this machine ready to render?
 python -m idr check   examples/self/storyboard.json --root .    # validate and estimate length
 python -m idr preview examples/self/storyboard.json --root .    # one frame per scene, to look at
+python -m idr preview examples/self/storyboard.json --root . --beats   # one frame per change on screen
 python -m idr render  examples/self/storyboard.json --root .    # make out/storyboard_light.mp4
 python -m idr render  examples/self/storyboard.json --root . --theme dark
 python -m idr voices
+python -m idr sounds "PyPI" "memtable"      # how the voice will pronounce something, in IPA
 ```
 
 `examples/self` explains this repo with this repo. `examples/showcase` shows a diff, a web page, a PDF, an image and word-timed highlights. `examples/commit` explains one of this repo's own commits (it needs the full git history, so it will not check in a shallow clone). `examples/kokoro-onnx` explains [kokoro-onnx](https://github.com/thewh1teagle/kokoro-onnx), the voice library used here; clone that repo and pass it as `--root` (line numbers match its commit `3596b26`, and the render stops with a clear error if they have moved).

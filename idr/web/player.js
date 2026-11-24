@@ -146,14 +146,17 @@
     // Tall frames wrap long lines, so the font follows a comfortable line length instead.
     const padY = 24, room = G.bottom - top - 2 * padY;
     const longest = Math.max(...scene.rows.map(r => r.len), 1);
-    const gutterEm = diff ? 8.4 : 4.6;                 // line numbers (two columns and a sign on a diff), in ems
+    // Line numbers (two columns and a sign on a diff), in ems. A column is as wide as its longest number.
+    const digits = Math.max(...scene.rows.map(r => Math.max(String(r.a || '').length, String(r.b || '').length)));
+    const numEm = Math.max(diff ? 2.6 : 3.4, 0.62 * digits + (diff ? 0.2 : 0.9));
+    const gutterEm = diff ? 2 * (numEm + 0.6) + 2.0 : numEm + 1.2;
     const apply = font => {
       lines.style.fontSize = `${font}px`;
       lines.style.lineHeight = `${Math.round(font / 0.56)}px`;
       rows.forEach(r => {
         r.nums.forEach((no, i) => {
           const sign = diff && i === r.nums.length - 1;
-          no.style.width = `${Math.round(font * (sign ? 1.2 : diff ? 2.6 : 3.4))}px`;
+          no.style.width = `${Math.round(font * (sign ? 1.2 : numEm))}px`;
           no.style.marginRight = `${Math.round(font * (sign ? 0.4 : diff ? 0.6 : 1))}px`;
         });
       });
@@ -451,17 +454,24 @@
     const cy = track(0, v => { cam.y = v; });
     const cw = track(scene.iw, v => { cam.w = v; draw(); });   // added last, so one draw per frame sees all three
     const aspect = frameH / frameW;
+    // A zoom on the scene's first sentence is where the scene opens: no pan down from the top of the
+    // picture, which would show for a moment whatever happens to be there.
+    const opening = scene.ops.find(op => op.op === 'cam');
     for (const op of scene.ops) {
       if (op.op === 'cam') {
         let x = 0, y = 0, w = scene.iw;
         if (op.region) {
           const [rx, ry, rw, rh] = op.region.map((v, i) => v * (i % 2 ? scene.ih : scene.iw));
           // Zoom in at most 3x, and never so far that the picture's own pixels are blown up past 1.6x.
-          w = Math.min(scene.iw, Math.max(scene.iw / 3, frameW / 1.6, rw * 1.3, (rh * 1.3) / aspect));
-          x = Math.min(Math.max(0, rx + rw / 2 - w / 2), scene.iw - w);
+          // A region taller than the frame at full width is shown whole, with the picture pulled back
+          // (up to 2.5x) and centred, instead of being cropped.
+          const cap = Math.max(scene.iw, Math.min(scene.iw * 2.5, (rh * 1.08) / aspect));
+          w = Math.min(cap, Math.max(scene.iw / 3, frameW / 1.6, rw * 1.3, (rh * 1.3) / aspect));
+          x = w >= scene.iw ? (scene.iw - w) / 2 : Math.min(Math.max(0, rx + rw / 2 - w / 2), scene.iw - w);
           y = Math.min(Math.max(0, ry + rh / 2 - (w * aspect) / 2), Math.max(0, scene.ih - w * aspect));
         }
-        cx.to(op.t, x, 0.8, easeInOut); cy.to(op.t, y, 0.8, easeInOut); cw.to(op.t, w, 0.8, easeInOut);
+        const move = op === opening && op.t <= 1.0 ? 0 : 0.8;
+        cx.to(move ? op.t : 0, x, move, easeInOut); cy.to(move ? op.t : 0, y, move, easeInOut); cw.to(move ? op.t : 0, w, move, easeInOut);
       } else if (op.op === 'box') {
         boxes.forEach((b, i) => b.o.to(op.t, i === op.id ? 1 : 0, 0.3));
       }
