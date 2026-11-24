@@ -220,6 +220,12 @@ body { font-family: "IDR Sans", sans-serif; -webkit-font-smoothing: antialiased;
 .scene.plot svg .axisname { font-family: "IDR Serif", serif; font-style: italic; font-size: 30px; fill: var(--ink); opacity: 0.75; }
 .scene.plot svg .curve path { fill: none; stroke: var(--c); stroke-width: 5.5; stroke-linecap: round; stroke-linejoin: round; }
 .scene.plot svg .shade { fill: var(--c); fill-opacity: 0.22; stroke: none; opacity: 0; }
+.scene.plot svg .riemann { opacity: 0; }
+.scene.plot svg .riemann rect { fill: var(--c); fill-opacity: 0.2; stroke: var(--c); stroke-opacity: 0.75; stroke-width: 1.5; }
+.scene.plot svg .asymptote { stroke: var(--mute); stroke-width: 2.5; stroke-dasharray: 12 9; }
+.scene.plot svg .asymptote-name { font-family: "IDR Sans", sans-serif; font-size: 26px; fill: var(--ink); opacity: 0.7; }
+.scene.plot .legend .live { font-family: "IDR Sans", sans-serif; font-size: 0.72em; color: var(--mute); margin-left: 6px;
+  font-variant-numeric: tabular-nums; min-width: 5.2em; }
 .scene.plot svg .tangent { stroke: var(--ink); stroke-width: 3.5; stroke-linecap: round; opacity: 0; }
 .scene.plot svg .guide { fill: none; stroke: var(--ink); stroke-width: 2.5; stroke-dasharray: 3 9; stroke-linecap: round; opacity: 0; }
 .scene.plot svg .dot { fill: var(--c); stroke: var(--bg); stroke-width: 4; }

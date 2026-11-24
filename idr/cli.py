@@ -105,7 +105,27 @@ def cmd_check(args) -> None:
     home = board_path.parent
     scenes, warnings = plan.build(storyboard, root, opts["theme"], plan.DryNarrator(), opts["captions"], opts["format"], opts["pronounce"], home)
     _report(scenes, warnings, estimated=True)
+    misfits = _misfits(scenes, opts["format"])
+    if misfits:
+        raise plan.StoryboardError("\n".join(misfits))
     print("ok" if not warnings else f"ok, with {len(warnings)} warning(s)")
+
+
+def _misfits(scenes, fmt: str) -> list[str]:
+    """Formulas and graphs that do not fit on screen. Only laying a scene out with the real fonts can tell, so
+    the scenes that hold math are built in the browser once, without filming them."""
+    laid_out = [scene for scene in scenes if scene.payload.get("type") in ("math", "plot")]
+    if not laid_out:
+        return []
+    try:
+        from .render import Studio
+        with Studio(fmt) as studio:
+            for scene in laid_out:
+                studio._load(scene)
+            return list(studio.problems)
+    except Exception as problem:                           # no browser here: preview and render will say it instead
+        print(f"warning: could not lay out the math scenes to see whether they fit ({type(problem).__name__})")
+        return []
 
 
 def _moments(scene, every_beat: bool) -> list[float]:

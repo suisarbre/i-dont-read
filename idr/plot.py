@@ -110,31 +110,8 @@ class Formula:
         return np.power(a, b)
 
     def area(self, a: float, b: float) -> tuple[float, float]:
-        """The signed area between the curve and the x axis from a to b, and how far off it may be.
-
-        Simpson's rule at three resolutions. A number is only given when they agree: across a pole, or where
-        the curve swings faster than it can be sampled, they do not, and that is an error, not an area.
-        NaN when the formula has no value somewhere in the range."""
-        sums, peaks, total = [], [], 0.0
-        for n in (4096, 16384, 65536):
-            ys = self(np.linspace(a, b, n + 1))
-            if not np.isfinite(ys).all():
-                return float("nan"), 0.0
-            h = (b - a) / n
-            sums.append(float(h / 3 * (ys[0] + ys[-1] + 4 * ys[1:-1:2].sum() + 2 * ys[2:-1:2].sum())))
-            peaks.append(float(np.abs(ys).max()))
-            total = float(np.abs(ys).mean() * (b - a))                    # the area counted without sign
-        # Near a pole the tallest sample keeps growing as the samples close in on it. The sums may even agree
-        # with each other there (evenly spaced samples cancel across 1/x), so this is checked on its own.
-        if peaks[2] > 2.5 * peaks[1] and peaks[1] > 2.5 * peaks[0]:
-            raise ValueError("grows without bound")
-        error = max(abs(sums[2] - sums[1]), abs(sums[1] - sums[0]) / 16)
-        if error > 1e-3 * max(total, 1e-300):
-            raise ValueError("cannot be measured")
-        value = sums[2]
-        return (0.0 if abs(value) < 1e-11 * total else value), error
-
-    # ---- LaTeX ---------------------------------------------------------------------------------
+        """The signed area between the curve and the x axis from a to b, and how far off it may be (see `area`)."""
+        return area(self, a, b)
 
     def tex(self) -> str:
         return self._tex(self.node)
@@ -157,7 +134,7 @@ class Formula:
         if isinstance(node, ast.Constant):
             return number(float(node.value))
         if isinstance(node, ast.Name):
-            return node.id if node.id in self.variables else CONSTANTS[node.id][1]
+            return {"theta": r"\theta"}.get(node.id, node.id) if node.id in self.variables else CONSTANTS[node.id][1]
         if isinstance(node, ast.UnaryOp):
             inner = self._group(node.operand, self._rank(node.operand) < 2)
             return f"-{inner}" if isinstance(node.op, ast.USub) else inner
@@ -183,6 +160,99 @@ class Formula:
             or (isinstance(base, ast.Call) and base.func.id != "exp")
         left = self._tex(base) if simple else rf"\left({self._tex(base)}\right)"
         return f"{left}^{{{self._tex(node.right)}}}"
+
+
+def area(f, a: float, b: float) -> tuple[float, float]:
+    """The signed area between f and the x axis from a to b, and how far off it may be.
+
+    Simpson's rule at three resolutions. A number is only given when they agree: across a pole, or where
+    the curve swings faster than it can be sampled, they do not, and that is an error, not an area.
+    NaN when the formula has no value somewhere in the range."""
+    sums, peaks, total = [], [], 0.0
+    for n in (4096, 16384, 65536):
+        ys = np.asarray(f(np.linspace(a, b, n + 1)), dtype=float)
+        if not np.isfinite(ys).all():
+            return float("nan"), 0.0
+        h = (b - a) / n
+        sums.append(float(h / 3 * (ys[0] + ys[-1] + 4 * ys[1:-1:2].sum() + 2 * ys[2:-1:2].sum())))
+        peaks.append(float(np.abs(ys).max()))
+        total = float(np.abs(ys).mean() * (b - a))                    # the area counted without sign
+    # Near a pole the tallest sample keeps growing as the samples close in on it. The sums may even agree
+    # with each other there (evenly spaced samples cancel across 1/x), so this is checked on its own.
+    if peaks[2] > 2.5 * peaks[1] and peaks[1] > 2.5 * peaks[0]:
+        raise ValueError("grows without bound")
+    error = max(abs(sums[2] - sums[1]), abs(sums[1] - sums[0]) / 16)
+    if error > 1e-3 * max(total, 1e-300):
+        raise ValueError("cannot be measured")
+    value = sums[2]
+    return (0.0 if abs(value) < 1e-11 * total else value), error
+
+# ---- LaTeX ---------------------------------------------------------------------------------
+
+
+def root(f, lo: float, hi: float) -> float:
+    """Where f crosses zero between lo and hi. There must be exactly one crossing in sight: with none there is
+    nothing to mark, and with several the storyboard has to say which, by narrowing the range."""
+    xs = np.linspace(lo, hi, 2001)
+    ys = np.asarray(f(xs), dtype=float)
+    if not np.isfinite(ys).all():
+        raise ValueError("has no value somewhere in that range")
+    live = np.nonzero(ys != 0)[0]                           # a sample that is exactly 0 sits between its neighbours' signs
+    if not len(live):
+        raise ValueError("is zero all the way across that range")
+    above = ys[live] > 0
+    turns = np.nonzero(above[:-1] != above[1:])[0]
+    if len(turns) > 1:
+        raise ValueError(f"crosses zero {len(turns)} times in that range; narrow it to the crossing you mean")
+    if len(turns) == 0:
+        zeros = np.nonzero(ys == 0)[0]
+        if len(zeros) and zeros[-1] - zeros[0] == len(zeros) - 1:
+            return float(xs[zeros[len(zeros) // 2]])        # it touches zero there without crossing
+        raise ValueError("does not cross zero in that range")
+    a, b = float(xs[live[turns[0]]]), float(xs[live[turns[0] + 1]])
+    fa, start = float(f(a)), abs(float(f(a)) - float(f(b)))
+    for _ in range(200):
+        mid = (a + b) / 2
+        fm = float(f(mid))
+        if fm == 0:
+            return mid
+        if mid in (a, b):
+            break
+        if (fm > 0) == (fa > 0):
+            a, fa = mid, fm
+        else:
+            b = mid
+    if abs(float(f(a)) - float(f(b))) > 0.5 * start:        # a pole or a step also changes sign, without passing through 0
+        raise ValueError("jumps across zero in that range instead of crossing it")
+    return (a + b) / 2
+
+
+def extremum(f, lo: float, hi: float, highest: bool) -> float:
+    """Where f is largest (or smallest) between lo and hi: the best of a fine sampling, then closed in on."""
+    xs = np.linspace(lo, hi, 4001)
+    ys = np.asarray(f(xs), dtype=float)
+    if not np.isfinite(ys).all():
+        raise ValueError("has no value somewhere in that range")
+    sign = 1.0 if highest else -1.0
+    k = int(np.argmax(sign * ys))
+    a, b = float(xs[max(k - 1, 0)]), float(xs[min(k + 1, len(xs) - 1)])
+    ratio = (math.sqrt(5) - 1) / 2
+    c, d = b - ratio * (b - a), a + ratio * (b - a)
+    fc, fd = sign * float(f(c)), sign * float(f(d))
+    for _ in range(120):                                    # golden-section search
+        if fc > fd:
+            b, d, fd = d, c, fc
+            c = b - ratio * (b - a)
+            fc = sign * float(f(c))
+        else:
+            a, c, fc = c, d, fd
+            d = a + ratio * (b - a)
+            fd = sign * float(f(d))
+    x = (a + b) / 2
+    for end in (lo, hi):                                    # the very end of the range, if that is where it is
+        if sign * float(f(end)) >= sign * float(f(x)):
+            x = end
+    return x
 
 
 def minus(text: str) -> str:
@@ -686,6 +756,74 @@ class Parametric:
     def direction(self, t: float, wide: float, high: float) -> tuple[float, float, float]:
         """(dx, dy, uncertainty of the slope) of the tangent at t; ValueError where there is none."""
         return heading(self._at, t, self.t1 - self.t0, wide, high, self.t0, self.t1)
+
+
+class Polar(Parametric):
+    """A curve given by its distance from the origin at each angle: r = f(theta)."""
+
+    kind = "parametric"
+
+    def __init__(self, r: str, t0: float, t1: float):
+        self.r = Formula(r, ("theta",))
+        self.t0, self.t1 = t0, t1
+        self.text = f"r = {r}"
+        self.fx = lambda theta: self.r(theta) * np.cos(theta)
+        self.fy = lambda theta: self.r(theta) * np.sin(theta)
+
+    def tex(self) -> str:
+        return rf"r = {self.r.tex()}"
+
+
+class Changing:
+    """One curve that changes as the video goes: through a list of formulas (the Taylor polynomials of rising
+    degree), or as a number in its formula sweeps from one value to another (sin(k x) for k from 1 to 4).
+
+    Every stage is a real graph, sampled at the same x positions; the player moves the line from one to the next."""
+
+    kind = "changing"
+
+    def __init__(self, stages: list[str] | None = None, expr: str | None = None, letter: str | None = None,
+                 lo: float = 0.0, hi: float = 1.0, name: str | None = None, steps: int = 48):
+        if stages is not None:
+            self.formulas = [Formula(text) for text in stages]
+            self.values = None
+            self.text = stages[0]
+            self.labels = [f"y = {f.tex()}" for f in self.formulas]
+            self.texts = None
+            self.eval = [lambda xs, f=f: f(xs) for f in self.formulas]
+        else:
+            f = Formula(expr, ("x", letter))
+            self.values = [lo + (hi - lo) * k / steps for k in range(steps + 1)]
+            self.text = expr
+            self.labels = [(f"{name}(x) = " if name else "y = ") + f.tex()]
+            self.texts = [f"{letter} = {fixed(v)}" for v in self.values]
+            self.eval = [lambda xs, v=v: f(xs, v) for v in self.values]
+
+    def tex(self) -> str:
+        return self.labels[0]
+
+    def frames(self, x0: float, x1: float, y0: float, y1: float) -> tuple[list[float], list[list[float]]]:
+        """The x positions, and the heights of every stage at them."""
+        xs = np.linspace(x0, x1, SAMPLES)
+        high = y1 - y0
+        out = []
+        for n, stage in enumerate(self.eval, 1):
+            ys = np.asarray(stage(xs), dtype=float)
+            if not np.isfinite(ys).all() or runs_away(stage, x0, x1):
+                raise ValueError(f"stage {n} has no value somewhere in the x range; a curve that changes must have one "
+                                 "everywhere (no poles, no gaps)")
+            got = sampled(lambda v, stage=stage: (v, stage(v)), x0, x1, x0, x1, y0, y1)[0]
+            if len(got) != SAMPLES:
+                raise ValueError(f"stage {n} bends too fast for a curve that changes; show a narrower range")
+            out.append([tidy(float(min(max(v, y0 - high), y1 + high)), high) for v in ys])
+        return [tidy(float(v), x1 - x0) for v in xs], out
+
+    def heights(self, x0: float, x1: float):
+        xs = np.linspace(x0, x1, SAMPLES)
+        return np.concatenate([np.asarray(stage(xs), dtype=float) for stage in self.eval])
+
+    def bounded(self, x0: float, x1: float) -> bool:
+        return True
 
 
 class Implicit:

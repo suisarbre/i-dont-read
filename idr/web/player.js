@@ -81,8 +81,9 @@
 
   // Math is rendered with KaTeX, with the same options plan.py checked it with (see texmath.py).
   const KATEX = { throwOnError: true, strict: 'ignore', trust: c => c.command === '\\htmlClass' };
+  let macros = {};                                       // the source's own \newcommands, for the scene being built
   function tex(node, source, display) {
-    try { katex.render(source, node, { ...KATEX, displayMode: !!display }); }
+    try { katex.render(source, node, { ...KATEX, displayMode: !!display, macros: { ...macros } }); }
     catch (e) { node.textContent = source; }          // checked before filming, so this is only a safety net
   }
 
@@ -647,7 +648,7 @@
       const key = legend.appendChild(el('div', `key c${i + 1}`));
       key.appendChild(el('span', 'swatch'));
       tex(key.appendChild(el('span', 'name')), c.tex, false);
-      return anim(key, { o: 0 });
+      return Object.assign(anim(key, { o: 0 }), { el: key });
     });
     let font = tall ? 34 : 38;                         // the legend stays on one line where it can
     legend.style.fontSize = `${font}px`;
@@ -669,7 +670,9 @@
     if (scene.credit) wrap.appendChild(el('div', 'credit', scene.credit));
     // The left margin holds the y axis's numbers: wider when they are long (−2.5×10⁻⁵), as far as a fifth of the graph.
     const longest = Math.max(0, ...scene.yticks.map(([, text]) => String(text).length));
-    const m = { l: Math.min(Math.max(tall ? 84 : 104, 34 + longest * 15), Math.round(W * 0.2)), r: 44, t: 44, b: 62 };
+    const needed = 34 + longest * 15, widest = Math.round(W * 0.2);
+    const m = { l: Math.min(Math.max(tall ? 84 : 104, needed), widest), r: 44, t: 44, b: 62 };
+    const tickScale = needed > widest ? Math.max(0.55, (widest - 34) / (longest * 15)) : 1;   // very long numbers are set smaller
     let pw = W - m.l - m.r, ph = H - m.t - m.b;
     const [x0, x1] = scene.x, [y0, y1] = scene.y;
     if (scene.equal) {                                 // one unit is as long across as it is up: a circle is round
@@ -691,7 +694,9 @@
     }
     for (const [v, label] of scene.yticks) {
       make('line', { class: 'grid', x1: m.l, x2: m.l + pw, y1: f2(py(v)), y2: f2(py(v)) }, back);
-      make('text', { class: 'tick', x: f2(m.l - 16), y: f2(py(v) + 8), 'text-anchor': 'end' }, back).textContent = label;
+      const number = make('text', { class: 'tick', x: f2(m.l - 16), y: f2(py(v) + 8), 'text-anchor': 'end' }, back);
+      number.textContent = label;
+      if (tickScale < 1) number.style.fontSize = `${f2(tickScale * 100)}%`;
     }
     make('rect', { class: 'edge', x: m.l, y: m.t, width: pw, height: ph }, back);
     make('line', { class: 'axis', x1: m.l, x2: m.l + pw, y1: f2(axisY), y2: f2(axisY) }, back);
@@ -699,6 +704,15 @@
     // Axis names sit just outside the plot area, where no curve can run through them.
     make('text', { class: 'axisname', x: f2(m.l + pw + 22), y: f2(axisY + 9), 'text-anchor': 'middle' }, back).textContent = scene.xlabel;
     make('text', { class: 'axisname', x: f2(axisX), y: f2(m.t - 10), 'text-anchor': 'middle' }, back).textContent = scene.ylabel;
+    for (const g of scene.guides || []) {
+      if ('x' in g) {
+        make('line', { class: 'asymptote', x1: f2(px(g.x)), x2: f2(px(g.x)), y1: m.t, y2: m.t + ph }, back);
+        make('text', { class: 'asymptote-name', x: f2(px(g.x) + 12), y: f2(m.t + ph - 14) }, back).textContent = g.label;
+      } else {
+        make('line', { class: 'asymptote', x1: m.l, x2: m.l + pw, y1: f2(py(g.y)), y2: f2(py(g.y)) }, back);
+        make('text', { class: 'asymptote-name', x: f2(m.l + 12), y: f2(py(g.y) - 12) }, back).textContent = g.label;
+      }
+    }
     enter(wrap, t0 + 0.05, 30, 0.6);
 
     const defs = make('defs', {}, svg);
@@ -709,8 +723,33 @@
 
     // A function of x is drawn from left to right, the way one is sketched. A curve that can turn back on
     // itself (a circle, a spiral) is traced along its own length instead.
+    const stages = {};                                   // curve number -> the track that moves it through its stages
     const draw = scene.curves.map((c, i) => {
       const d = line => line.map(([x, y], k) => `${k ? 'L' : 'M'}${f2(px(x))} ${f2(py(y))}`).join(' ');
+      if (c.draw === 'stages') {
+        // One line that moves through its stages. Every stage was worked out by plan.py at the same x positions;
+        // between two stages each point of the line moves straight from one height to the other.
+        const g = make('g', { class: `curve c${i + 1}` }, lines);
+        const path = make('path', {}, g);
+        const X = c.xs.map(x => f2(px(x)));
+        const name = keys[i].el.querySelector('.name'), live = c.texts ? keys[i].el.appendChild(el('span', 'live')) : null;
+        const labels = (c.labels || []).map(source => { const box = document.createElement('span'); tex(box, source, false); return box.innerHTML; });
+        let showing = -1;
+        stages[i] = track(0, v => {
+          const last = c.frames.length - 1, k = Math.min(Math.floor(v), last - 1 < 0 ? 0 : last - 1), f = Math.min(Math.max(v - k, 0), 1);
+          const a = c.frames[k], b = c.frames[Math.min(k + 1, last)];
+          let out = '';
+          for (let n = 0; n < X.length; n++) out += `${n ? 'L' : 'M'}${X[n]} ${f2(py(a[n] + (b[n] - a[n]) * f))} `;
+          path.setAttribute('d', out);
+          const near = Math.min(Math.round(v), last);
+          if (near !== showing) {
+            showing = near;
+            if (labels.length > 1) name.innerHTML = labels[near];
+            if (live) live.textContent = c.texts[near];
+          }
+        });
+        return track(0, v => { g.style.opacity = v.toFixed(3); });
+      }
       if (c.draw === 'wipe') {
         const wipe = make('rect', { x: m.l, y: m.t, width: 0, height: ph }, make('clipPath', { id: `plot-wipe-${i}` }, defs));
         const g = make('g', { 'clip-path': `url(#plot-wipe-${i})`, class: `curve c${i + 1}` }, lines);
@@ -766,10 +805,28 @@
         const floor = Math.min(Math.max(0, y0), y1);
         const pts = mk.outline.map(([x, y]) => `${f2(px(x))} ${f2(py(y))}`);
         const a = mk.outline[0][0], b = mk.outline[mk.outline.length - 1][0];
-        const area = make('path', { class: `shade ${cls}`, d: `M${f2(px(a))} ${f2(py(floor))} L${pts.join(' L')} L${f2(px(b))} ${f2(py(floor))} Z` }, shades);
         const mid = mk.outline[Math.floor(mk.outline.length / 2)];
-        const label = tag(mk.tex, (w, h) => [px((a + b) / 2) - w / 2, (py(mid[1]) + py(floor)) / 2 - h / 2], index);
+        // Down to the x axis, or (between two curves) back along the other curve.
+        const back = mk.base ? mk.base.slice().reverse().map(([x, y]) => `${f2(px(x))} ${f2(py(y))}`).join(' L')
+          : `${f2(px(b))} ${f2(py(floor))} L${f2(px(a))} ${f2(py(floor))}`;
+        const other = mk.base ? py(mk.base[Math.floor(mk.base.length / 2)][1]) : py(floor);
+        const area = make('path', { class: `shade ${cls}`, d: `M${pts.join(' L')} L${back} Z` }, shades);
+        const label = tag(mk.tex, (w, h) => [px((a + b) / 2) - w / 2, (py(mid[1]) + other) / 2 - h / 2], index);
         return { parts: [fade(area)], label };
+      }
+      if (mk.kind === 'riemann') {
+        // The rectangles of a Riemann sum: each as wide as its strip and as tall as the curve at the chosen point.
+        const g = make('g', { class: `riemann ${cls}` }, shades);
+        const zero = py(Math.min(Math.max(0, y0), y1));
+        let top = zero;
+        for (const [xa, xb, h] of mk.rects) {
+          const Y = py(h);
+          top = Math.min(top, Y);
+          make('rect', { x: f2(px(xa)), width: f2(px(xb) - px(xa)), y: f2(Math.min(Y, zero)), height: f2(Math.abs(zero - Y)) }, g);
+        }
+        const a = mk.rects[0][0], b = mk.rects[mk.rects.length - 1][1];
+        const label = tag(mk.tex, (w, h) => [px((a + b) / 2) - w / 2, top - h - 14], index);
+        return { parts: [fade(g)], label };
       }
       // A tangent is a line through (x, y) along the direction (dx, dy), long enough to leave the plot area.
       const through = (line, x, y, dx, dy) => {
@@ -785,6 +842,7 @@
         const line = mk.tangent ? make('line', { class: 'tangent' }, over) : null;
         const guide = make('path', { class: 'guide' }, over);
         const dot = make('circle', { class: `dot ${cls}`, r: 11 }, dots);
+        const fixed = mk.anchor ? make('circle', { class: `dot ${cls}`, cx: f2(px(mk.anchor[0])), cy: f2(py(mk.anchor[1])), r: 9 }, dots) : null;
         const where = wrap.appendChild(el('div', 'tag live'));
         const slope = mk.tangent ? wrap.appendChild(el('div', 'tag live')) : null;
         const widest = (node, texts) => {              // as wide as its widest text, so it does not twitch
@@ -815,17 +873,18 @@
           }
         });
         const labels = [anim(where, { o: 0 }), ...(slope ? [anim(slope, { o: 0 })] : [])];
-        return { parts: [fade(guide), fade(dot), ...(line ? [fade(line)] : [])], labels, go };
+        return { parts: [fade(guide), fade(dot), ...(line ? [fade(line)] : []), ...(fixed ? [fade(fixed)] : [])], labels, go };
       }
       const X = px(mk.x), Y = py(mk.y);
       if (mk.kind === 'tangent') {
         const line = make('line', { class: 'tangent' }, over);
         const rising = through(line, mk.x, mk.y, mk.dx, mk.dy);
         const dot = make('circle', { class: `dot ${cls}`, cx: f2(X), cy: f2(Y), r: 8 }, dots);
+        const far = mk.other ? make('circle', { class: `dot ${cls}`, cx: f2(px(mk.other[0])), cy: f2(py(mk.other[1])), r: 8 }, dots) : null;
         // Under the line, beside the point of contact: a rising line leaves room below and to the right, a
         // falling one below and to the left. (A point's own label goes above and to the right.)
         const label = tag(mk.tex, (w, h) => [rising ? X + 22 : X - 22 - w, Y + 16], index);
-        return { parts: [fade(line), fade(dot)], label };
+        return { parts: [fade(line), fade(dot), ...(far ? [fade(far)] : [])], label };
       }
       const guide = make('path', { class: 'guide', d: `M${f2(X)} ${f2(axisY)} L${f2(X)} ${f2(Y)} L${f2(axisX)} ${f2(Y)}` }, over);
       const dot = make('circle', { class: `dot ${cls}`, cx: f2(X), cy: f2(Y), r: 0 }, dots);
@@ -847,6 +906,8 @@
         }
       } else if (op.op === 'travel') {
         marks[op.mark].go.to(op.t, 1, op.dur, easeInOut);
+      } else if (op.op === 'stage') {
+        stages[op.curve].to(op.t, op.to, op.dur, op.steady ? (v => v) : easeInOut);
       }
     }
   };
@@ -929,6 +990,7 @@
     problems() { return problems; },
     async load(scene) {
       tracks = []; windows = []; styled = []; last = null; problems = [];
+      macros = scene.macros || {};
       G = FORMATS[scene.format] || FORMATS.wide;
       const html = document.documentElement;
       html.dataset.theme = scene.theme || 'light';

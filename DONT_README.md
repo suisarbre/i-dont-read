@@ -87,7 +87,7 @@ The agent reads the source, splits it into chapters, and writes a storyboard: a 
 3. Draw each scene as an HTML page in headless Chrome and film it frame by frame.
 4. Mix narration and sound effects, then join the scenes.
 
-Scene types: `code`, `diff`, `quote`, `image`, `flow`, `compare`, `stats`, `steps`, `math`, `table` (formulas and tables, with `$...$` math typeset by a bundled KaTeX in any scene text) and `plot` (graphs of functions, parameter curves and equations, with points, tangents, areas and travelling points computed from the formulas). `SKILL.md` documents the storyboard format and is what the agent follows.
+Scene types: `code`, `diff`, `quote`, `image`, `flow`, `compare`, `stats`, `steps`, `math`, `table` (formulas and tables, with `$...$` math typeset by a bundled KaTeX in any scene text) and `plot` (graphs of functions, parameter, polar and equation curves, with points, tangents, secants, areas, Riemann sums and curves that change, every number computed from the formulas and quotable in the narration). `SKILL.md` documents the storyboard format and is what the agent follows.
 
 ## Use the engine directly
 

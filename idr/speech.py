@@ -141,8 +141,14 @@ def _over(match: re.Match) -> str:
     return f"{top} over {bottom}"
 
 
+_TEN = re.compile("(?:(\\d(?:\\.\\d+)?)\u00d7)?10(\u207b?)([\u2070\u00b9\u00b2\u00b3\u2074-\u2079]+)")
+_PLAIN = str.maketrans("\u2070\u00b9\u00b2\u00b3\u2074\u2075\u2076\u2077\u2078\u2079", "0123456789")
+
+
 def _notation(text: str) -> str:
     """Formula fragments said the way a person reads them aloud."""
+    text = _TEN.sub(lambda m: (f"{m.group(1)} times " if m.group(1) else "")              # 1.9×10⁻²², as the engine writes it
+                    + f"10 to the {'minus ' if m.group(2) else ''}{m.group(3).translate(_PLAIN)}", text)
     text = _SCIENTIFIC.sub(lambda m: (f"{m.group(1)} times " if m.group(1) != "1" else "")
                            + f"10 to the {'minus ' if m.group(2) else ''}{m.group(3)}", text)
     text = _CALL.sub(_call, text)

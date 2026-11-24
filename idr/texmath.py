@@ -6,6 +6,7 @@ followed by a digit, `\\$` is a literal dollar, and `$$...$$` is display math.
 """
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 KATEX = Path(__file__).parent / "web" / "katex" / "katex.min.js"
@@ -80,8 +81,68 @@ def balanced(tex: str) -> bool:
     return depth == 0
 
 
-def validate(items: list[tuple[str, bool]]) -> list[str | None] | None:
-    """KaTeX's error for each (LaTeX, display) pair, or None where it renders. None overall if no browser could run."""
+_COMMENT = re.compile(r"(?<!\\)%.*")
+_NEWCOMMAND = re.compile(r"\\(?:re|provide)?newcommand\*?\s*\{?\s*(\\[A-Za-z@]+)\s*\}?\s*(?:\[(\d)\])?\s*(\[)?")
+_DEF = re.compile(r"\\(?:g|e|x)?def\s*(\\[A-Za-z@]+)\s*((?:#\d)*)\s*(?=\{)")
+_OPERATOR = re.compile(r"\\DeclareMathOperator(\*?)\s*\{?\s*(\\[A-Za-z@]+)\s*\}?\s*(?=\{)")
+_INCLUDED = re.compile(r"\\(?:input|include|usepackage)\s*(?:\[[^\]]*\])?\s*\{([^{}]+)\}")
+# What a macro may not expand to: KaTeX would draw these as red error text (see plan._NOT_SHOWN).
+_UNSAFE = re.compile(r"\\(?:href|url|includegraphics|htmlId|htmlStyle|htmlData|htmlClass)(?![A-Za-z])")
+
+
+def _group(text: str, start: int) -> tuple[str, int] | None:
+    """The {...} group that opens at `start` (after any spaces): its inside, and the position just past it."""
+    while start < len(text) and text[start].isspace():
+        start += 1
+    if start >= len(text) or text[start] != "{":
+        return None
+    depth, i = 0, start
+    while i < len(text):
+        if text[i] == "\\":
+            i += 2
+            continue
+        depth += text[i] == "{"
+        depth -= text[i] == "}"
+        if depth == 0:
+            return text[start + 1:i], i + 1
+        i += 1
+    return None
+
+
+def macros(text: str) -> dict[str, str]:
+    """The author's own commands defined in a LaTeX source: \\newcommand, \\renewcommand, \\def and
+    \\DeclareMathOperator, as the table KaTeX takes. A paper's formulas are written with these; without them
+    its equations do not parse, and with them they are shown as the author meant them.
+
+    A command with an optional argument is left out (KaTeX has no such thing), as is one that expands to
+    something a video may not show; a formula that uses it then fails the check by name."""
+    text = _COMMENT.sub("", text)
+    found: dict[str, str] = {}
+    for m in _NEWCOMMAND.finditer(text):
+        if m.group(3):                                    # [default]: an optional argument
+            continue
+        body = _group(text, m.end())
+        if body:
+            found[m.group(1)] = body[0].strip()
+    for m in _DEF.finditer(text):
+        body = _group(text, m.end())
+        if body:
+            found[m.group(1)] = body[0].strip()
+    for m in _OPERATOR.finditer(text):
+        body = _group(text, m.end())
+        if body:
+            found[m.group(2)] = f"\\operatorname{m.group(1)}{{{body[0].strip()}}}"
+    return {name: body for name, body in found.items() if not _UNSAFE.search(body) and name != "\\htmlClass"}
+
+
+def included(text: str) -> list[str]:
+    """Files a LaTeX source pulls in (\\input, \\include, \\usepackage), which may hold its commands."""
+    return [name.strip() for m in _INCLUDED.finditer(_COMMENT.sub("", text)) for name in m.group(1).split(",")]
+
+
+def validate(items: list[tuple]) -> list[str | None] | None:
+    """KaTeX's error for each (LaTeX, display[, macros]) item, or None where it renders. None overall if no
+    browser could run."""
     if not items:
         return []
     try:
@@ -95,10 +156,10 @@ def validate(items: list[tuple[str, bool]]) -> list[str | None] | None:
                 page.set_content("<!doctype html><meta charset='utf-8'><body></body>")
                 page.add_script_tag(path=str(KATEX))
                 return page.evaluate(
-                    "items => items.map(([tex, display]) => { try { katex.renderToString(tex, "
-                    f"Object.assign({{ displayMode: display }}, {OPTIONS_JS})); return null; }} "
-                    "catch (e) { return String(e.message || e).replace(/^KaTeX parse error: /, ''); } })",
-                    [list(item) for item in items])
+                    "items => items.map(([tex, display, macros]) => { try { katex.renderToString(tex, "
+                    f"Object.assign({{ displayMode: display, macros: Object.assign({{}}, macros || {{}}) }}, {OPTIONS_JS})); "
+                    "return null; } catch (e) { return String(e.message || e).replace(/^KaTeX parse error: /, ''); } })",
+                    [[item[0], item[1], item[2] if len(item) > 2 else None] for item in items])
             finally:
                 browser.close()
     except Exception:                                    # no browser here: the caller warns that math went unchecked

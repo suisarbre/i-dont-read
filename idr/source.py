@@ -298,6 +298,26 @@ def display_math(root: Path, file: str, first: int, last: int, ref: str | None =
     return blocks, lines[0]
 
 
+def tex_macros(root: Path, file: str, ref: str | None = None, encoding: str | None = None) -> dict[str, str]:
+    """The commands a LaTeX file defines for itself, and those in the files it pulls in from beside it."""
+    from . import texmath
+    if not file.lower().endswith((".tex", ".ltx", ".sty")):
+        return {}
+    text = _read(root, file, ref, "math", encoding)
+    found: dict[str, str] = {}
+    for name in texmath.included(text):                    # a paper often keeps them in macros.tex or its own .sty
+        for candidate in (name, name + ".tex", name + ".sty"):
+            beside = (Path(file).parent / candidate).as_posix()
+            if (root / beside).is_file() and (root / beside).resolve().is_relative_to(root.resolve()):
+                try:
+                    found.update(texmath.macros(_read(root, beside, None, "math", encoding)))
+                except (ValueError, OSError):
+                    pass
+                break
+    found.update(texmath.macros(text))
+    return found
+
+
 # --- tables ------------------------------------------------------------------
 
 _SEPARATOR = re.compile(r"^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$")
