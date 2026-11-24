@@ -636,4 +636,5 @@ def build(storyboard: dict, root: Path, theme: str, narrator, captions: bool = T
                 problems.append(str(problem))
     if problems:
         raise StoryboardError("\nerror: ".join(problems))
+    scenes[0].payload["opening"] = True               # drawn in full from the first frame (see player.js)
     return scenes, b.warnings

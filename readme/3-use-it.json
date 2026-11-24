@@ -1,0 +1,138 @@
+{
+  "title": "Ask for a video",
+  "intro": {
+    "say": "How to ask, what you get back, and how to change the look.",
+    "kicker": "i-dont-read"
+  },
+  "chapters": [
+    {
+      "title": "Point at a thing",
+      "say": "What can you ask it to explain?",
+      "scenes": [
+        {
+          "type": "quote",
+          "heading": "How to ask",
+          "file": "DONT_README.md",
+          "lines": [
+            39,
+            39
+          ],
+          "beats": [
+            {
+              "say": "Ask for a video, and point at the thing.",
+              "mark": "\"explain this repo as a video\""
+            },
+            {
+              "say": "It can be a folder, a file, a commit or pull request, a web address, a PDF, or text you paste in.",
+              "at": "a commit",
+              "mark": "a folder, a file, a commit or pull request, a web address, a PDF, or text pasted into the chat"
+            }
+          ]
+        },
+        {
+          "type": "quote",
+          "heading": "What comes back",
+          "file": "DONT_README.md",
+          "lines": [
+            41,
+            41
+          ],
+          "beats": [
+            {
+              "say": "The reply is the video, and one line with its title and length. Nothing else.",
+              "mark": "The reply is the video and one caption line"
+            },
+            {
+              "say": "To change it, say what to change. Scenes that stay the same are not filmed again.",
+              "at": "Scenes that stay",
+              "mark": "scenes that stay the same are not filmed again"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Change the look",
+      "say": "Dark theme? A vertical video? Another voice?",
+      "scenes": [
+        {
+          "type": "quote",
+          "heading": "Say it",
+          "file": "DONT_README.md",
+          "lines": [
+            43,
+            43
+          ],
+          "beats": [
+            {
+              "say": "Say dark for the dark theme, and vertical for a video shaped for a phone.",
+              "mark": [
+                "\"dark\"",
+                "\"vertical\""
+              ]
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "heading": "Or make it stick",
+          "file": "DONT_README.md",
+          "lines": [
+            46,
+            46
+          ],
+          "expect": "\"theme\": \"dark\"",
+          "beats": [
+            {
+              "say": "To make a choice stick, put it in a small settings file in the project.",
+              "highlight": 46,
+              "note": ".i-dont-read.json"
+            }
+          ]
+        },
+        {
+          "type": "flow",
+          "heading": "Which setting wins",
+          "nodes": [
+            {
+              "label": "Command line",
+              "desc": "A flag"
+            },
+            {
+              "label": "Storyboard",
+              "desc": "This video"
+            },
+            {
+              "label": "Project file",
+              "desc": "This project"
+            },
+            {
+              "label": "Defaults",
+              "desc": "Light, wide"
+            }
+          ],
+          "beats": [
+            {
+              "say": "A setting comes from the first place that has it: the command line, the storyboard, the project file, and then the defaults.",
+              "reveal": 1,
+              "cues": [
+                {
+                  "at": "the storyboard",
+                  "reveal": 2
+                },
+                {
+                  "at": "the project file",
+                  "reveal": 3
+                },
+                {
+                  "at": "the defaults",
+                  "reveal": 4
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
