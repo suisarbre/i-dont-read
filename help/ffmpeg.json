@@ -28,8 +28,7 @@
           ],
           "beats": [
             {
-              "say": "The missing tool is ffmpeg. It turns the frames I draw into a video file.",
-              "speak": "The missing tool is eff eff em peg. It turns the frames I draw into a video file."
+              "say": "The missing tool is ffmpeg. It turns the frames I draw into a video file."
             },
             {
               "say": "On a Mac, install it with Homebrew.",

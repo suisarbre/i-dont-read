@@ -65,6 +65,15 @@ A web page that needs a login cannot be opened, and neither can one the network 
 
 The help videos are rendered from the storyboards beside them; `sh help/build.sh` rebuilds them.
 
+## Other ways to install
+
+The clone in "Install" is all Claude Code needs. Two other routes put the same folder in place:
+
+- As a Claude Code plugin: `claude plugin marketplace add suisarbre/i-dont-read`, then `claude plugin install i-dont-read@i-dont-read`. The skill then shows up as `i-dont-read:i-dont-read`.
+- With the skills installer, for any agent that reads `SKILL.md`: `npx skills add suisarbre/i-dont-read`.
+
+Either way the Python packages, ffmpeg and a browser are still yours to install, and `python -m idr doctor` still tells you what is missing. Only Claude has been tried so far.
+
 ## How it works
 
 The agent reads the source, splits it into chapters, and writes a storyboard: a JSON file listing the scenes, the sentences to speak, and what to show during each sentence. The engine in `idr/` does the rest.
