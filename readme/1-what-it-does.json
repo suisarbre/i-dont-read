@@ -1,0 +1,257 @@
+{
+  "title": "Don't read. Just watch.",
+  "intro": {
+    "say": "This tool explains things as videos. This one was made with it, from its own repository."
+  },
+  "chapters": [
+    {
+      "title": "Ask, and get a video",
+      "say": "What is this, in one sentence?",
+      "scenes": [
+        {
+          "type": "quote",
+          "heading": "In one sentence",
+          "file": "DONT_README.md",
+          "lines": [
+            5,
+            5
+          ],
+          "beats": [
+            {
+              "say": "It is a skill for coding agents. Point one at a codebase, a document, a change or a web page, and it answers with a short narrated video.",
+              "at": "it answers",
+              "mark": "short narrated explainer video"
+            }
+          ]
+        },
+        {
+          "type": "flow",
+          "heading": "From a question to an mp4",
+          "nodes": [
+            {
+              "label": "You ask",
+              "desc": "For a video"
+            },
+            {
+              "label": "Agent reads",
+              "desc": "The real source"
+            },
+            {
+              "label": "Storyboard",
+              "desc": "Scenes and sentences"
+            },
+            {
+              "label": "Engine films",
+              "desc": "Voice, picture, sound"
+            },
+            {
+              "label": "One mp4",
+              "desc": "With chapters"
+            }
+          ],
+          "beats": [
+            {
+              "say": "You ask. The agent reads the source and writes a storyboard, and the engine speaks it, films it, and hands back one file.",
+              "reveal": 1,
+              "cues": [
+                {
+                  "at": "The agent reads",
+                  "reveal": 2
+                },
+                {
+                  "at": "writes a storyboard",
+                  "reveal": 3
+                },
+                {
+                  "at": "the engine speaks",
+                  "reveal": 4
+                },
+                {
+                  "at": "hands back",
+                  "reveal": 5
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "The real thing on screen",
+      "say": "What does it actually show?",
+      "scenes": [
+        {
+          "type": "code",
+          "heading": "Code, read from the file",
+          "file": "idr/render.py",
+          "lines": [
+            75,
+            81
+          ],
+          "expect": "captured, frame = 0",
+          "beats": [
+            {
+              "say": "Code is read from the file by line number and highlighted, never retyped.",
+              "highlight": [
+                76,
+                77
+              ]
+            },
+            {
+              "say": "These lines are the loop that filmed this video: one screenshot for every frame that changed.",
+              "highlight": [
+                78,
+                80
+              ],
+              "note": "filmed by this"
+            }
+          ]
+        },
+        {
+          "type": "diff",
+          "heading": "A change, shown as a change",
+          "before": "examples/showcase/media/before.py",
+          "after": "examples/showcase/media/after.py",
+          "lines": [
+            1,
+            10
+          ],
+          "expect": "def handle(request):",
+          "beats": [
+            {
+              "say": "A change is shown as a change: the new lines in green, and the line they replaced in red.",
+              "show": "added"
+            },
+            {
+              "say": "And a highlight can land on a word, in the middle of a sentence.",
+              "at": "land on a word",
+              "highlight": [
+                5,
+                6
+              ],
+              "note": "on the word"
+            }
+          ]
+        },
+        {
+          "type": "image",
+          "heading": "A web page, as a reader sees it",
+          "url": "examples/showcase/media/readme.html",
+          "beats": [
+            {
+              "say": "A web page is photographed in a real browser, and the camera goes to words it finds there.",
+              "at": "the camera goes",
+              "zoom": {
+                "find": "Nothing is retyped."
+              },
+              "box": {
+                "find": "Nothing is retyped."
+              }
+            }
+          ]
+        },
+        {
+          "type": "image",
+          "heading": "A page of a PDF",
+          "file": "examples/showcase/media/readme.pdf",
+          "page": 1,
+          "beats": [
+            {
+              "say": "The same works on a page of a PDF.",
+              "zoom": {
+                "find": "A local voice model (Kokoro) speaks every sentence, so no account or API key is"
+              },
+              "box": {
+                "find": "Narrates it."
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Explained, not just shown",
+      "say": "And what turns pictures into an explanation?",
+      "scenes": [
+        {
+          "type": "quote",
+          "heading": "Voice, sound, chapters",
+          "file": "DONT_README.md",
+          "lines": [
+            10,
+            12
+          ],
+          "beats": [
+            {
+              "say": "A voice model on your own machine speaks every sentence, so there is no account and no key.",
+              "mark": "no account or API key is needed"
+            },
+            {
+              "say": "Sound effects mark the changes on screen.",
+              "mark": "Adds sound effects"
+            },
+            {
+              "say": "And each idea gets a chapter of its own, with a hard cut.",
+              "mark": "One idea per chapter."
+            }
+          ]
+        },
+        {
+          "type": "stats",
+          "heading": "In numbers",
+          "items": [
+            {
+              "value": "8",
+              "label": "kinds of scene",
+              "note": "DONT_README.md, How it works"
+            },
+            {
+              "value": "0",
+              "label": "accounts or API keys",
+              "note": "the voice runs locally"
+            },
+            {
+              "value": "350 MB",
+              "label": "voice model, downloaded once",
+              "note": "DONT_README.md, Install"
+            }
+          ],
+          "beats": [
+            {
+              "say": "Eight kinds of scene, no accounts, and one download of about three hundred and fifty megabytes.",
+              "reveal": 1,
+              "cues": [
+                {
+                  "at": "no accounts",
+                  "reveal": 2
+                },
+                {
+                  "at": "one download",
+                  "reveal": 3
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "quote",
+          "heading": "The whole answer",
+          "file": "DONT_README.md",
+          "lines": [
+            18,
+            18
+          ],
+          "beats": [
+            {
+              "say": "The answer is only the video. There is no summary to read under it.",
+              "mark": "Video is the whole answer."
+            },
+            {
+              "say": "Don't read. Just watch."
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,164 @@
+{
+  "title": "When something goes wrong",
+  "intro": {
+    "say": "Missing tools, a missing voice, a missing font, and source that has moved."
+  },
+  "chapters": [
+    {
+      "title": "Ask the doctor",
+      "say": "A render will not start. Now what?",
+      "scenes": [
+        {
+          "type": "quote",
+          "heading": "One command",
+          "file": "DONT_README.md",
+          "lines": [
+            53,
+            53
+          ],
+          "beats": [
+            {
+              "say": "One command checks the four things a render needs.",
+              "mark": "checks the Python packages, ffmpeg, the browser and the voice model"
+            },
+            {
+              "say": "For each one that is missing, it names a ready-made video that explains the fix.",
+              "mark": "names a ready-made video"
+            },
+            {
+              "say": "So even the error message arrives as a video.",
+              "mark": "sends that video instead of an error message"
+            }
+          ]
+        },
+        {
+          "type": "steps",
+          "heading": "The four fixes",
+          "items": [
+            {
+              "title": "ffmpeg",
+              "detail": "Or winget, or apt",
+              "cmd": "brew install ffmpeg"
+            },
+            {
+              "title": "A browser",
+              "detail": "Or install Google Chrome",
+              "cmd": "python -m playwright install chromium"
+            },
+            {
+              "title": "Python packages",
+              "cmd": "pip install -r requirements.txt"
+            },
+            {
+              "title": "The voice model",
+              "detail": "Or allow downloads from github.com",
+              "cmd": "~/.cache/i-dont-read/"
+            }
+          ],
+          "beats": [
+            {
+              "say": "Install ffmpeg with your package manager, and a browser with one command.",
+              "reveal": 1,
+              "cues": [
+                {
+                  "at": "a browser",
+                  "reveal": 2
+                }
+              ]
+            },
+            {
+              "say": "The Python packages come from the requirements file.",
+              "reveal": 3
+            },
+            {
+              "say": "And the voice model can be dropped into its cache folder by hand.",
+              "reveal": 4
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "No voice, no font",
+      "say": "What if only the voice is missing, or a font?",
+      "scenes": [
+        {
+          "type": "quote",
+          "heading": "Still a video",
+          "file": "DONT_README.md",
+          "lines": [
+            62,
+            62
+          ],
+          "beats": [
+            {
+              "say": "Without the voice model, a silent render still makes the video, and the captions carry the narration.",
+              "mark": "render --silent still makes a video"
+            },
+            {
+              "say": "If the machine cannot draw some characters, the render says which ones, and a font that covers them fixes it.",
+              "at": "a font that covers",
+              "mark": "installing a font that covers them"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "It will not show what is not there",
+      "say": "And when the error is about the source itself?",
+      "scenes": [
+        {
+          "type": "quote",
+          "heading": "Errors on purpose",
+          "file": "DONT_README.md",
+          "lines": [
+            64,
+            64
+          ],
+          "beats": [
+            {
+              "say": "The engine refuses to show something that is not there.",
+              "mark": "refuses to show something that is not there"
+            },
+            {
+              "say": "If a file changed and the lines have moved, the check stops, and says which scene and why.",
+              "at": "the check stops",
+              "mark": "says which scene and why"
+            }
+          ]
+        },
+        {
+          "type": "code",
+          "heading": "The guard itself",
+          "file": "idr/plan.py",
+          "lines": [
+            281,
+            290
+          ],
+          "expect": "def _expect",
+          "beats": [
+            {
+              "say": "This is that guard. Every code scene says what its first line should contain.",
+              "highlight": [
+                286,
+                287
+              ]
+            },
+            {
+              "say": "If the file no longer agrees, the render stops here instead of showing the wrong lines.",
+              "highlight": [
+                288,
+                290
+              ],
+              "note": "stop"
+            },
+            {
+              "say": "So an error like this is the tool keeping its promise."
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

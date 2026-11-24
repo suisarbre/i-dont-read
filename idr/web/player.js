@@ -16,6 +16,7 @@
   let windows = [];  // [start, end] spans during which the picture changes
   let styled = [];   // elements whose opacity/transform are driven by tracks
   let last = null;
+  let settle = 0, capText = null;
 
   // Numeric tween track. Keys must be added in time order.
   function track(initial, apply) {
@@ -510,8 +511,11 @@
         if (slack > 60) root.style.transform = `translateY(${Math.round(slack * 0.45)}px)`;
       }
 
+      // The scene that opens the video is fully drawn from its first frame, which is the picture
+      // players and file browsers show before anyone presses play. Only its caption follows the clock.
+      settle = scene.opening ? Math.max(0, ...windows.map(w => w[1])) : 0;
       const cap = document.querySelector('#caption span');
-      const capText = switcher('', v => { cap.textContent = v; cap.style.display = v ? '' : 'none'; });
+      capText = switcher('', v => { cap.textContent = v; cap.style.display = v ? '' : 'none'; });
       for (const c of scene.captions || []) capText.set(c.t, c.text);
 
       window.idr.seek(0);
@@ -541,7 +545,8 @@
 
     // Draw the frame at t. Returns true when it differs from the last drawn frame.
     seek(t) {
-      for (const tr of tracks) tr.seek(t);
+      const drawn = Math.max(t, settle);
+      for (const tr of tracks) tr.seek(tr === capText ? t : drawn);
       flush();
       const changed = last === null || t < last || windows.some(([s, e]) => s <= t && e > last);
       last = t;

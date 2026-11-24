@@ -110,8 +110,8 @@
       "scenes": [
         {
           "type": "quote",
-          "heading": "The promises in the README",
-          "file": "README.md",
+          "heading": "The promises, in its own words",
+          "file": "DONT_README.md",
           "lines": [
             9,
             12

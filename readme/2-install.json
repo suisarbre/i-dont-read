@@ -1,0 +1,110 @@
+{
+  "title": "Install",
+  "intro": {
+    "say": "Installing takes two commands and one check.",
+    "kicker": "i-dont-read"
+  },
+  "chapters": [
+    {
+      "title": "Two commands",
+      "say": "What do you have to install?",
+      "scenes": [
+        {
+          "type": "code",
+          "heading": "As a skill for Claude Code",
+          "file": "DONT_README.md",
+          "lines": [
+            25,
+            26
+          ],
+          "expect": "git clone",
+          "beats": [
+            {
+              "say": "Clone the repository into your agent's skills folder.",
+              "highlight": 25
+            },
+            {
+              "say": "Then install the Python packages it lists.",
+              "highlight": 26
+            }
+          ]
+        },
+        {
+          "type": "steps",
+          "heading": "It also needs",
+          "items": [
+            {
+              "title": "ffmpeg",
+              "detail": "Encodes and joins the video"
+            },
+            {
+              "title": "Chrome or Chromium",
+              "detail": "Films each scene"
+            },
+            {
+              "title": "The voice model",
+              "detail": "About 350 MB, downloaded by the first render"
+            }
+          ],
+          "beats": [
+            {
+              "say": "It also needs ffmpeg, and Chrome or Chromium.",
+              "reveal": 1,
+              "cues": [
+                {
+                  "at": "Chrome",
+                  "reveal": 2
+                }
+              ]
+            },
+            {
+              "say": "The voice model downloads itself on the first render.",
+              "reveal": 3
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "One check",
+      "say": "How do you know the machine is ready?",
+      "scenes": [
+        {
+          "type": "code",
+          "heading": "From the skill's folder",
+          "file": "DONT_README.md",
+          "lines": [
+            32,
+            32
+          ],
+          "expect": "python -m idr doctor",
+          "beats": [
+            {
+              "say": "Run the doctor.",
+              "highlight": 32
+            }
+          ]
+        },
+        {
+          "type": "quote",
+          "heading": "What it tells you",
+          "file": "DONT_README.md",
+          "lines": [
+            35,
+            35
+          ],
+          "beats": [
+            {
+              "say": "It prints one line for each of the four things a render needs, and the word ready when they are all there.",
+              "at": "the word ready",
+              "mark": "ready when all of them are there"
+            },
+            {
+              "say": "That is the whole installation. Now ask for a video."
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
