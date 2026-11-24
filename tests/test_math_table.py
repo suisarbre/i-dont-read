@@ -16,6 +16,8 @@ def build(scenes, files=None, **top):
         for name, text in (files or {}).items():
             (root / name).write_text(text, encoding="utf-8")
         board = {"title": "t", "chapters": [{"title": "c", "scenes": scenes}], **top}
+        if not any(plan._shows_source(scene) for scene in scenes):
+            board.setdefault("source", "none")              # nothing read from a file: the video has to say so
         return plan.build(board, root, "light", plan.DryNarrator())
 
 

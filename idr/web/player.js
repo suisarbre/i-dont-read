@@ -112,9 +112,12 @@
 
   function header(root, scene) {
     let t = 0.05;
-    for (const key of ['kicker', 'heading', 'sub']) {
+    for (const key of ['kicker', 'heading', 'sub', 'basis']) {
       if (!scene[key]) continue;
-      enter(root.appendChild(el('div', key, scene[key])), t);
+      const node = root.appendChild(el('div', key, scene[key]));
+      // What is not from the source says so, beside the chapter name.
+      if (key === 'kicker' && scene.beyond) node.appendChild(el('span', 'beyond', 'Beyond the source'));
+      enter(node, t);
       t += 0.1;
     }
     return t;

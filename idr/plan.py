@@ -12,7 +12,7 @@ from pathlib import Path
 
 import numpy as np
 
-from . import picture, plot, source, texmath
+from . import picture, plot, source, speech, texmath
 
 FPS = 30
 LEAD = 0.9        # entrance animation before the first beat
@@ -38,6 +38,7 @@ MAX_CELL_CHARS = 40
 
 _CODE_LIKE = re.compile(r"[_\\<>{}\[\]=$^]|\w/\w|\w\(\)|\.(py|js|ts|json|md|cpp|hpp|h|rs|go|java|html|css|sh)\b")
 _NOT_ACTIONS = {"say", "speak", "hold", "cues", "at"}
+EXAMPLE_SUB = "Example written for this video"
 
 
 class StoryboardError(ValueError):
@@ -111,6 +112,8 @@ class _Builder:
         self.warnings: list[str] = []
         self.noted: set[str] = set()
         self.math_default = True
+        self.pronounce: dict[str, str] = {}   # written word -> how the voice should say it, for every sentence
+        self.home = root                      # the storyboard's own folder: where an example written for the video is
         self.tex: list[dict] = []      # every LaTeX expression on screen, checked with KaTeX once all scenes are built
 
     def rich(self, value, on: bool, where: str):
@@ -185,7 +188,7 @@ class _Clock:
             if exact and _CODE_LIKE.search(text):
                 self.b.warn(self.where, f"narration has code-like text ({text[:44]!r}...); "
                                         'add "speak" with how it should be said aloud')
-            clip = self.b.narrator.say(beat.get("speak") or text)
+            clip = self.b.narrator.say(speech.spoken(beat.get("speak") or text, self.b.pronounce))
             self.scene.narration.append((start, clip.samples))
             self._captions(text, start, clip, exact)
             self.t = start + clip.duration + GAP
@@ -331,10 +334,17 @@ def _where(spec: dict, first: int, last: int) -> str:
 def _code(b: _Builder, spec: dict, kicker: str) -> Scene:
     first, last = spec["lines"]
     where = f"{spec['file']}:{first}-{last}"
-    rows = source.extract(b.root, spec["file"], first, last, spec.get("ref"), spec.get("encoding"))
+    if spec.get("example") and spec.get("ref"):
+        raise StoryboardError(f'{where}: an example is a file you wrote for the video, so it has no "ref"')
+    # An example is read from beside the storyboard, not from the source folder, which is the user's and is not written to.
+    rows = source.extract(b.home if spec.get("example") else b.root, spec["file"], first, last, spec.get("ref"),
+                          spec.get("encoding"))
     _expect(spec, rows, where)
     _check_rows(b, rows, where)
-    scene = b.scene("code", kicker, {**spec, "sub": _where(spec, first, last)}, sub_is_source=True, rows=rows)
+    # An example is code written for the video: the line under the heading says so instead of naming a file,
+    # so it cannot be taken for part of the source.
+    sub = EXAMPLE_SUB if spec.get("example") else _where(spec, first, last)
+    scene = b.scene("code", kicker, {**spec, "sub": sub}, sub_is_source=True, rows=rows)
     scene.sfx.append((0.0, "whoosh"))
     _lines(b, scene, spec, where, {first + i: i for i in range(len(rows))})
     return scene
@@ -1145,17 +1155,55 @@ def _plot(b: _Builder, spec: dict, kicker: str) -> Scene:
 SCENES = {"code": _code, "diff": _diff, "quote": _quote, "image": _image, "flow": _flow, "compare": _compare,
           "stats": _stats, "steps": _steps, "math": _math, "table": _table, "plot": _plot}
 OVERVIEW_FROM = 3   # videos with this many chapters open with a card that lists them
+NO_SOURCE = "No source document  ·  explained from general knowledge"   # on the opening card of such a video
+
+
+def _shows_source(spec: dict) -> bool:
+    """Whether a scene puts the source itself on screen (a file, a page, a picture), as opposed to an explanation."""
+    kind = spec.get("type")
+    if kind == "code":
+        return not spec.get("example")
+    return kind in ("diff", "quote", "image") or (kind in ("math", "table") and bool(spec.get("file")))
+
+
+def _basis(storyboard: dict) -> bool:
+    """True when the video has no source and says so. A video must either show its source or declare this."""
+    declared = storyboard.get("source")
+    if declared not in (None, "none"):
+        raise StoryboardError(f'"source" at the top of a storyboard can only be "none" (there is no source, and the '
+                              f'opening card will say so), not {declared!r}')
+    specs = [spec for chapter in storyboard["chapters"] for spec in chapter.get("scenes") or []]
+    shown = [spec for spec in specs if _shows_source(spec)]
+    if declared == "none" and shown:
+        first = shown[0]
+        raise StoryboardError(f'"source" is "none", but the {first.get("type")} scene '
+                              f'{first.get("heading") or first.get("file") or first.get("url") or ""!r} shows a source; '
+                              'remove "source": "none", and mark the scenes that go past the source with "beyond": true')
+    instructions = all(spec.get("type") == "steps" for spec in specs)      # a help video: nothing is being explained
+    if declared is None and not shown and specs and not instructions:
+        raise StoryboardError('no scene shows a source (code, diff, quote, image, or math or table read from a file). '
+                              'Show the source; or, if the user gave none and this is your own explanation, put '
+                              '"source": "none" at the top of the storyboard so the video says so')
+    return declared == "none"
 
 
 def build(storyboard: dict, root: Path, theme: str, narrator, captions: bool = True,
-          fmt: str = "wide") -> tuple[list[Scene], list[str]]:
-    """All scenes of the video in order, plus warnings about things that may not read well."""
+          fmt: str = "wide", pronounce: dict | None = None, home: Path | None = None) -> tuple[list[Scene], list[str]]:
+    """All scenes of the video in order, plus warnings about things that may not read well.
+
+    `root` is the source folder; `home` is the storyboard's folder (the same, unless given)."""
     b = _Builder(root, theme, narrator, captions, fmt)
+    b.home = home or root
     b.math_default = bool(storyboard.get("math", True))
+    try:
+        b.pronounce = {**speech.table(pronounce, "settings"), **speech.table(storyboard.get("pronounce"), "storyboard")}
+    except ValueError as problem:
+        raise StoryboardError(str(problem)) from None
     scenes: list[Scene] = []
     problems: list[str] = []
     if not storyboard.get("chapters"):
         raise StoryboardError("the storyboard has no chapters")
+    unsourced = _basis(storyboard)
     intro = storyboard.get("intro")
     if len(storyboard["chapters"]) >= OVERVIEW_FROM:
         if not storyboard.get("title"):
@@ -1173,12 +1221,21 @@ def build(storyboard: dict, root: Path, theme: str, narrator, captions: bool = T
         if not chapter.get("scenes"):
             raise StoryboardError(f"chapter {n} ({chapter['title']}) has no scenes")
         kicker = f"{n} · {chapter['title']}"
+        # "beyond" marks what is not from the source, in a video that has one: the header says so on screen.
+        # With no source at all, the opening card has said it for the whole video.
+        card.payload["beyond"] = bool(chapter.get("beyond")) and not unsourced
         for spec in chapter["scenes"]:
             make = SCENES.get(spec.get("type"))
             if not make:
                 raise StoryboardError(f"unknown scene type {spec.get('type')!r}; use one of {', '.join(SCENES)}")
+            beyond = bool(chapter.get("beyond") or spec.get("beyond") or (spec.get("type") == "code" and spec.get("example")))
+            if _shows_source(spec) and (chapter.get("beyond") or spec.get("beyond")):
+                problems.append(f'chapter {n}, {spec.get("heading") or spec["type"]}: this scene shows the source, so it '
+                                'cannot be "beyond" it; put "beyond" on the scenes that are your own explanation')
+                continue
             try:
                 scenes.append(make(b, spec, kicker))
+                scenes[-1].payload["beyond"] = beyond and not unsourced
             except KeyError as missing:
                 problems.append(f"chapter {n}, {spec['type']} scene: missing field {missing}")
             except (ValueError, FileNotFoundError) as problem:      # report every scene's problem in one run
@@ -1187,4 +1244,6 @@ def build(storyboard: dict, root: Path, theme: str, narrator, captions: bool = T
     if problems:
         raise StoryboardError("\nerror: ".join(problems))
     scenes[0].payload["opening"] = True               # drawn in full from the first frame (see player.js)
+    if unsourced:
+        scenes[0].payload["basis"] = NO_SOURCE
     return scenes, b.warnings

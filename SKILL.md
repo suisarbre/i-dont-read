@@ -1,6 +1,6 @@
 ---
 name: i-dont-read
-description: Turn a codebase, a file or document, a commit or pull request, a web page, a PDF or pasted text into a short narrated explainer video (mp4) that shows the real source on screen with highlights, infographics, voice-over, sound effects and chapters. Use when the user says "explain this as a video", "make a video about this repo / file / doc / PR / page", "I don't want to read this, show me".
+description: Turn a codebase, a file or document, a commit or pull request, a web page, a PDF, pasted text or a plain topic into a short narrated explainer video (mp4) that shows the real source on screen with highlights, infographics, voice-over, sound effects and chapters, and answer follow-up questions about it the same way. Use when the user says "explain this as a video", "make a video about this repo / file / doc / PR / page", "I don't want to read this, show me".
 ---
 
 # I don't read
@@ -48,7 +48,7 @@ python -m idr doctor
 
 ## 3. Workflow
 
-1. **Read the source yourself, properly.** For a codebase: the README, the entry points, and the handful of files that carry the design. For a document: all of it. For a web page: fetch it and read its text (section 5 has more on pages). If the user pasted text into the chat, save it to a file first (`work/source.md`), because scenes can only show text that is in a file.
+1. **Read the source yourself, properly.** For a codebase: the README, the entry points, and the handful of files that carry the design. For a document: all of it. For a web page: fetch it and read its text (section 5 has more on pages). If the user pasted text into the chat, save it to a file first (`work/source.md`), because scenes can only show text that is in a file. If there is no source (the user named a topic), or the user is asking a question about a video you already made, read section 7 first.
 2. **Choose the chapters.** A chapter is one idea the viewer should walk away with. Explain one thing per chapter and cut; do not chain several ideas together. Most sources need 2 to 5 chapters. Let the content set the length: do not pad a small thing or cram a large one. With 3 or more chapters the video opens with a card that lists them, so the viewer sees the outline instead of reading one.
 3. **Write `work/storyboard.json`** (format in section 4).
 4. **Check it:** `python -m idr check work/storyboard.json --root SOURCE_DIR`. It lists every scene (the opening card shows up as scene 1, "Overview") and every problem it can find in one run. Fix every error, and every warning you can (one about something on a web page that cannot be closed or framed out may have to stay).
@@ -88,7 +88,7 @@ To change a finished video, edit the storyboard and render again. Scenes that di
 }
 ```
 
-`title` is required. `intro.say` is the one sentence spoken over the opening card; with 3 or more chapters that card lists the chapters (give it an `intro.say` too, or it plays silent), with fewer it appears only if you give `intro`. Other optional top-level fields: `theme` (`light` or `dark`), `voice`, `speed`, `captions`.
+`title` is required. `intro.say` is the one sentence spoken over the opening card; with 3 or more chapters that card lists the chapters (give it an `intro.say` too, or it plays silent), with fewer it appears only if you give `intro`. Other optional top-level fields: `theme` (`light` or `dark`), `voice`, `speed`, `captions`, `pronounce` (section 8), and `"source": "none"` when there is no source (section 7).
 
 Each chapter opens with a title card that shows `title` and speaks `say`. Then its scenes play in order.
 
@@ -96,7 +96,7 @@ A **beat** is one spoken sentence plus what changes on screen when that sentence
 
 | Scene | Use it when | Fields | What a beat can do |
 |---|---|---|---|
-| `code` | The point is in specific lines | `file`, `lines: [first, last]`, `expect`, optional `ref` (show the file as it was at a git ref) | `highlight`: a line number or `[first, last]` (stays until changed; `null` clears). `note`: a short label beside the highlight |
+| `code` | The point is in specific lines | `file`, `lines: [first, last]`, `expect`, optional `ref` (show the file as it was at a git ref). With `"example": true` the file is one you wrote for the video (section 7) | `highlight`: a line number or `[first, last]` (stays until changed; `null` clears). `note`: a short label beside the highlight |
 | `diff` | The point is what changed: a commit, a PR, a before and after | `file`, `from` (a git ref), optional `to` (a git ref; default is the file on disk), `lines: [first, last]` in the new file, `expect`. Or `before` and `after`: two file paths | `show`: `"removed"`, `"added"` or `"changed"` lights those lines. `highlight` and `note` as in `code`, by new-file line number |
 | `quote` | The source says it best in its own words: prose in a text or Markdown file | `file`, `lines: [first, last]`, optional `ref`. Consecutive lines are joined into paragraphs (a blank line or a list item starts a new one) and Markdown marks are removed, so do not use it for code or for comments inside code | `mark`: a phrase, or a list of phrases, to run a marker over. Copy it as it reads on screen or from the raw Markdown, from within one paragraph |
 | `image` | The source is a picture, a web page or a PDF | `file` (an image, or a PDF with `page`), or `url` (a web address or a local `.html` file). For a page, optional `click` and `top` (see "Web pages" below) | `zoom`: move the camera to a region (`null` goes back to the top of the picture at full width). `box`: outline a region and dim the rest (`null` removes it). A region is `{ "find": "exact words on the page" }` for web pages and PDFs, or `[x, y, width, height]` as fractions of the whole picture, from 0 to 1 |
@@ -108,7 +108,7 @@ A **beat** is one spoken sentence plus what changes on screen when that sentence
 | `table` | Rows and columns: results, options, a comparison of several things | From the source: `file` with `lines: [first, last]` around a Markdown table, or a `.csv`/`.tsv` with `rows: [first, last]` (data rows after the header) and optional `columns` (names or 1-based numbers, in the order to show). Written for the video: `header` and `rows`, plus `source` for a credit line | `reveal`: how many rows are visible (the header always is). `highlight`: `{ "row": n }`, `{ "col": name or n }` or `{ "cell": [n, col] }` (`null` clears). `note`: a short label by the highlight |
 | `plot` | The source is about mathematics, and the shape of a curve is the point | `expr`: a formula in `x`, or `curves`: 1 to 3 curves. A curve is a function of x (a string, or `{ "expr", "name" }` where `name` is one letter, as in f for f(x)), a curve in a parameter (`{ "x": "cos(t)", "y": "sin(t)", "t": [0, "2*pi"] }`), or an equation (`{ "equation": "x^2 + y^2 = 4" }`). `x: [from, to]`. Optional `y: [from, to]` (chosen from the curves if left out; required when every curve is an equation), `equal: true`, `xticks`/`yticks`, `xlabel`, `ylabel`, and `source` for a credit line | `reveal`: how many curves are drawn from now on. `point`: `{ "x": 2 }` marks the curve there and labels its coordinates. `tangent`: `{ "x": 2 }` draws the tangent and labels its slope. `shade`: `{ "from": 0, "to": 2 }` fills the area down to the x axis and labels it. `move`: `{ "from": -2, "to": 2 }` sends a point along the curve, with `"tangent": true` to carry its tangent. Each takes `"on": n` for the n-th curve, takes a list, stays until the next one of its kind, and is cleared by `null` |
 
-Any beat can also carry `speak` (see section 7) or, with no `say`, a `hold` in seconds. `intro` and a chapter take `speak` beside their `say` too.
+Any beat can also carry `speak` (see section 8) or, with no `say`, a `hold` in seconds. `intro` and a chapter take `speak` beside their `say` too.
 
 **Math in any text.** Write `$...$` for inline math and `$$...$$` for display math in headings, `quote` text, `table` cells and `flow`, `compare`, `stats` and `steps` text; it is typeset with KaTeX. A dollar sign counts as math only by Pandoc's rule (an opening `$` followed by a non-space, a closing `$` after a non-space and not before a digit), so `$5 to $10` and `$HOME` stay plain text; write `\$` for a literal dollar where the rule would misread it. LaTeX that does not parse is shown as the plain text it is, with a warning. `"math": false` on a scene (or at the top of the storyboard) turns this off. In a `quote`, a `mark` may cover whole `$...$` expressions but may not start or end inside one; to mark a term inside a formula, use a `math` scene.
 
@@ -194,7 +194,40 @@ How the old code behaved is a claim as well. Say it only when you can point at i
 - For the size of the change, use a `stats` scene with the numbers from `git diff --stat`, and name that command in `note`. It belongs at the start (the first chapter), before the intents, not under the last one.
 - A `compare` scene (before and after) suits a change in behaviour that is easier to say than to show.
 
-## 7. Writing the narration
+## 7. No source, follow-up questions, and going past the source
+
+Sometimes there is no source to stand on, or not enough of one:
+
+- **A topic alone**: "explain Taylor series", "how does TLS work".
+- **A follow-up question** about a video you made: "why is it done that way?", "what is marching squares?".
+- **A question the source does not answer**, whatever the user pointed at.
+
+**Look for a source first**, in this order: the source you already have (read more of it; the answer is often in a file you skipped); then a source you can fetch and show (the project's documentation, the paper, the standard, the official page: an `image` scene with its `url`, or a saved copy in a `quote` scene); then what you know. Only the last is "past the source".
+
+**The screen says which is which.** The viewer must be able to tell the source from your explanation, so the engine labels it and the check enforces it:
+
+- **No source at all:** put `"source": "none"` at the top of the storyboard. The opening card then says the video is explained from general knowledge, with no source document. The check demands this when no scene shows a source, and refuses it when one does. (A video of nothing but `steps`, such as a request to the user, needs neither.)
+- **Some scenes go past the source:** put `"beyond": true` on each such scene, or on the chapter when all of it does. Their header carries a "beyond the source" label. A scene that shows the source cannot be marked. A scene that sums up the source (a `flow` of its pipeline, `stats` from its numbers) is not beyond it and gets no mark.
+- **What you explain with:** `math` with `tex`, `plot`, `flow`, `compare`, `steps`, `stats`, and `table` with `header`.
+- **Code of your own:** write it to a file beside the storyboard (`work/example.py`), never into the source folder, and show it with a `code` scene that has `"example": true`. Its `file` is relative to the storyboard's folder, its subtitle says "Example written for this video" instead of naming a file, and it is labelled beyond the source. Run the example first if it can run, and say only what you saw it do.
+- Never put your own prose in a `quote` scene, or your own picture in an `image` scene. Your words are the narration.
+
+**What you may say past the source.**
+
+- Only what is settled and you are sure of: definitions, mathematics you can derive, how a standard algorithm or protocol works.
+- Anything that changes (versions, prices, who holds a role, what an API does today, benchmark results) must be looked up, and then the page you found is a source: show it.
+- No number without an origin. In `stats`, `table` and `compare`, say where each figure is from in `note` or `source`. Let `plot` work out coordinates, slopes and areas, and let a run of your example produce its output.
+- Do not put your explanation in the source's mouth: no "the author chose this because" unless the author wrote it. Say once, aloud, when you step past the source: "The file does not say why. In general, ...".
+- If you are not sure, say that it is not known, or leave it out.
+
+**A follow-up question** is answered with another video: usually one or two chapters, 30 to 90 seconds.
+
+- Write a new storyboard (`work/followup-1.json`) and render it with the same `--root`. Keep the first storyboard; the user may ask about it again.
+- Start where the question points: show that place in the source again (the same `code` or `quote` lines, or tighter), then answer. Do not recap the first video.
+- If the source answers the question, this is an ordinary video. If it does not, show what the source does say, then go past it in scenes marked `beyond`.
+- If the follow-up is to a video that had no source, the new one has `"source": "none"` too.
+
+## 8. Writing the narration
 
 - One sentence per beat, about 25 words at most. Write it to be heard, not read.
 - Say what the highlighted thing does and why it matters. Never read code aloud.
@@ -202,25 +235,28 @@ How the old code behaved is a claim as well. Say it only when you can point at i
 - Never put LaTeX or math symbols in `say`: the voice cannot read them. Say the formula in words ("H of X given Y"), and add `speak` if a name needs help.
 - The voice mispronounces identifiers, paths and symbols. When a sentence needs one, keep `say` as it should appear in the caption and add `speak` with how to pronounce it: `"say": "It calls parse_args() first."`, `"speak": "It calls parse args first."`
 - Acronyms in capitals are spelled out letter by letter (HTTP, URL, API, TLS), and numbers are read as numbers, so those need no `speak`. Made-up and mixed-case names often go wrong. You cannot listen, but you can look: `python -m idr sounds "PyPI" "memtable"` prints how each will be pronounced (here "pie pie" and "mem-tuh-bul"), and you can try a respelling the same way (`"pie pee eye"`, `"mem table"`) before putting it in `speak`.
+- Ordinals of a letter are read correctly without help: "n-th", "i-th", "k-th", "nth" and "(n+1)-th" are spoken as "enth", "eyeth", "kayth", "enth" and "n plus first". Write them as usual; the caption keeps your spelling.
+- For a name that comes up again and again, give its pronunciation once at the top of the storyboard instead of a `speak` on every beat: `"pronounce": { "PyPI": "pie pee eye", "memtable": "mem table" }`. It applies to every sentence (whole words, matching capitals), and a `.i-dont-read.json` in `--root` can hold a `pronounce` table for the whole project.
 - A chapter's `say` is a hook: the question the chapter answers, or its promise in one line.
 - Start with the content. No "in this video" and no "let's dive in". End the last chapter on the takeaway.
 - Narration is English only for now. If the user asked for another language, or wrote to you in one, make the video in English and say so in the caption, in their language. Everything you write for the screen (title, chapter titles, headings, labels) is English too, so it matches the voice; the source appears in whatever language it is written in.
 
-## 8. Stay truthful
+## 9. Stay truthful
 
 This is the reason the skill exists, so do not work around it.
 
 - `code`, `diff` and `quote` scenes show only what is in the file at those lines. Never paste code or prose into the storyboard.
 - The same holds for `math` and `table` scenes with `file`: the LaTeX and the cells are shown as the file has them (the one change is that `\label{...}` is dropped). If the source writes a formula as plain text, like `log2 1/p`, do not present your LaTeX version of it as the source: write it in a `math` scene with `tex`, which is shown as an explanation, with no file line.
 - A `math` or `table` scene with `tex` or `header` is your explanation. Every value in a written table must come from the source, as in `stats`; name where in `source`.
+- Whatever is not from the source is labelled on screen: `"source": "none"` for a video with no source, `"beyond": true` for scenes that go past one, `"example": true` for code you wrote (section 7). Do not leave the label off to make a video look better sourced than it is.
 - A `plot` scene is your explanation too. Plot a function the source gives or is plainly about, and say where it is from in `source`. Its points, slopes and areas are worked out by the engine from the formula, so they are exact for what is drawn; they are not a claim the source made unless the source says so.
 - Always set `expect` on a `code` or `diff` scene to a short string from the **first line** of `lines`. It pins the range: the render stops if that line is no longer there. Start the range on a line with something of its own on it, not on a lone brace.
 - A `mark` must be copied exactly from the quoted lines, and a `find` exactly from the page. The render stops if either is not found.
 - An `image` scene shows the real file or the real page. Do not draw or generate a picture and present it as the source.
-- Every number in a `stats` scene and every claim in a `compare` scene must come from the source. Put where it came from in `note` when you can. A number you worked out from the source's own numbers is fine when `note` shows what it was worked out from.
-- If the source does not say something, the video does not say it either.
+- Every number in a `stats` scene and every claim in a `compare` scene must come from the source (or, in a scene marked as past the source, from something you can name: section 7). Put where it came from in `note` when you can. A number you worked out from the source's own numbers is fine when `note` shows what it was worked out from.
+- If the source does not say something, the video does not say it either, except in scenes marked as going past the source, under the rules of section 7.
 
-## 9. Limits the check enforces
+## 10. Limits the check enforces
 
 - `code` and `diff`: at most 16 lines on screen per scene (on a diff, removed lines count), and 12 or fewer reads best. In the wide format the font shrinks to fit the longest line, so lines over about 120 columns (114 on a diff) make the code too small, and the tall format wraps long lines instead. Pick the lines that matter and split long passages into two scenes.
 - `quote`: at most 640 characters. Quote the paragraph that matters, not the page.
@@ -233,10 +269,10 @@ This is the reason the skill exists, so do not work around it.
 - `plot`: 1 to 3 curves. A formula may use numbers, its variable (`x`; `t` in a parameter curve; `x` and `y` in an equation), `+ - * / ^`, parentheses, `pi`, `e`, `tau` and the functions `sin cos tan asin acos atan sinh cosh tanh exp ln log log2 log10 sqrt cbrt abs floor ceil`; anything else is an error. An equation has exactly one `=`. A point, tangent, shaded area or travelling point must stay inside the graph, and a point given for an equation must satisfy it.
 - Headings: at most 60 characters.
 
-## 10. Settings
+## 11. Settings
 
 - Theme: light by default. If the user asks for dark, add `--theme dark` (or `"theme": "dark"` in the storyboard).
 - Format: wide (1920×1080) by default. If the user wants a vertical video, for a phone or for Shorts, add `--format tall` (1080×1920). The same storyboard works in both; preview it again in the format you will render.
-- A `.i-dont-read.json` file in `--root` sets the user's defaults: `{ "theme": "dark", "format": "tall", "voice": "am_michael", "speed": 1.0, "captions": true }`. If the user wants a setting to stick, write it there.
+- A `.i-dont-read.json` file in `--root` sets the user's defaults: `{ "theme": "dark", "format": "tall", "voice": "am_michael", "speed": 1.0, "captions": true }`. If the user wants a setting to stick, write it there. It can also hold `"pronounce"` (section 8).
 - `python -m idr voices` lists the voices (the default is `af_heart`). `--voice NAME` picks one, `--no-captions` turns the burnt-in captions off, `--silent` renders without voice.
 - Output is 30 fps, named `<storyboard>_<theme>.mp4` in `--out` (`<storyboard>_<theme>_tall.mp4` for the tall format).

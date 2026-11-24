@@ -12,7 +12,7 @@ from idr import plan, plot
 
 def build(scene, **top):
     with tempfile.TemporaryDirectory() as tmp:
-        board = {"title": "t", "chapters": [{"title": "c", "scenes": [scene]}], **top}
+        board = {"title": "t", "source": "none", "chapters": [{"title": "c", "scenes": [scene]}], **top}
         built, warnings = plan.build(board, Path(tmp), "light", plan.DryNarrator())
         return built[-1].payload, warnings
 

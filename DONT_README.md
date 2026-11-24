@@ -65,6 +65,10 @@ A web page that needs a login cannot be opened, and neither can one the network 
 
 The help videos are rendered from the storyboards beside them; `sh help/build.sh` rebuilds them.
 
+## With no source, and follow-up questions
+
+Give it a topic instead of a source ("explain Taylor series as a video") and it explains from what it knows; the opening card then says there is no source document. Ask a question about a video it made and the answer is another short video: it shows the place in the source the question is about, and anything it adds that the source does not say is labelled "beyond the source" on screen. Code it writes to illustrate a point is labelled as an example written for the video, never as one of your files.
+
 ## Other ways to install
 
 The clone in "Install" is all Claude Code needs. Two other routes put the same folder in place:

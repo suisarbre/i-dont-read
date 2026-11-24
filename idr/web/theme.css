@@ -74,6 +74,9 @@ body { font-family: "IDR Sans", sans-serif; -webkit-font-smoothing: antialiased;
 .kicker { font-size: 24px; font-weight: 600; letter-spacing: 0.14em; text-transform: uppercase; color: var(--accent); }
 .heading { font-family: "IDR Serif", serif; font-weight: 500; font-size: 62px; line-height: 1.12; letter-spacing: -0.012em; margin-top: 14px; }
 .sub { font-size: 28px; color: var(--mute); margin-top: 14px; }
+.kicker .beyond { margin-left: 18px; padding: 5px 14px 4px; border-radius: 999px; font-size: 19px; letter-spacing: 0.1em;
+  color: var(--bg); background: var(--mute); vertical-align: 2px; white-space: nowrap; }
+.basis { font-size: 26px; color: var(--mute); margin-top: 18px; }
 .sub code { font-family: "IDR Mono", monospace; font-size: 26px; }
 
 /* Captions */

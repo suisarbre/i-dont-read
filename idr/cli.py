@@ -28,9 +28,11 @@ class Blocked(SystemExit):
 def settings(storyboard: dict, root: Path, args) -> dict:
     """Command line beats the storyboard, which beats the project's config file, which beats defaults."""
     out = dict(DEFAULTS)
-    config = root / CONFIG
+    config, config_said = root / CONFIG, {}
     if config.is_file():
-        out.update({k: v for k, v in json.loads(config.read_text(encoding="utf-8")).items() if k in DEFAULTS})
+        config_said = json.loads(config.read_text(encoding="utf-8"))
+        out.update({k: v for k, v in config_said.items() if k in DEFAULTS})
+    out["pronounce"] = config_said.get("pronounce")       # respellings for the voice; the storyboard adds its own
     out.update({k: storyboard[k] for k in DEFAULTS if k in storyboard})
     out.update({k: getattr(args, k) for k in DEFAULTS if getattr(args, k, None) is not None})
     if out["theme"] not in ("light", "dark"):
@@ -97,8 +99,9 @@ def cmd_doctor(args) -> None:
 def cmd_check(args) -> None:
     from . import plan
 
-    storyboard, root, opts, _ = _load(args)
-    scenes, warnings = plan.build(storyboard, root, opts["theme"], plan.DryNarrator(), opts["captions"], opts["format"])
+    storyboard, root, opts, board_path = _load(args)
+    home = board_path.parent
+    scenes, warnings = plan.build(storyboard, root, opts["theme"], plan.DryNarrator(), opts["captions"], opts["format"], opts["pronounce"], home)
     _report(scenes, warnings, estimated=True)
     print("ok" if not warnings else f"ok, with {len(warnings)} warning(s)")
 
@@ -135,12 +138,13 @@ def cmd_preview(args) -> None:
     from . import plan, render
 
     storyboard, root, opts, board_path = _load(args)
+    home = board_path.parent
     out = Path(args.out).resolve()
     work = out / ".work" / "preview"
     work.mkdir(parents=True, exist_ok=True)
     for old in work.glob("*.png"):
         old.unlink()
-    scenes, warnings = plan.build(storyboard, root, opts["theme"], plan.DryNarrator(), opts["captions"], opts["format"])
+    scenes, warnings = plan.build(storyboard, root, opts["theme"], plan.DryNarrator(), opts["captions"], opts["format"], opts["pronounce"], home)
     _report(scenes, warnings, estimated=True)
     wanted = _picked(args.scenes, len(scenes))
     shots: list[tuple[Path, str]] = []
@@ -184,6 +188,7 @@ def cmd_render(args) -> None:
     from .tts import Narrator, VoiceUnavailable
 
     storyboard, root, opts, board_path = _load(args)
+    home = board_path.parent
     out = Path(args.out).resolve()
     work = out / ".work" / (_tag(opts) + ("_silent" if args.silent else ""))
     work.mkdir(parents=True, exist_ok=True)
@@ -194,7 +199,7 @@ def cmd_render(args) -> None:
     else:
         narrator = Narrator(opts["voice"], opts["speed"])
     try:
-        scenes, warnings = plan.build(storyboard, root, opts["theme"], narrator, opts["captions"], opts["format"])
+        scenes, warnings = plan.build(storyboard, root, opts["theme"], narrator, opts["captions"], opts["format"], opts["pronounce"], home)
     except VoiceUnavailable as problem:
         raise Blocked(f"blocked: {problem}. Render again with --silent to make a captioned video without voice, "
                       f"and send the user this video too: {env.HELP / 'voice-model.mp4'}") from None
@@ -242,6 +247,7 @@ def cmd_voices(args) -> None:
 
 def cmd_sounds(args) -> None:
     """How the voice will pronounce each piece of text, in IPA: a way to check a word without listening."""
+    from . import speech
     from .tts import Narrator, VoiceUnavailable
 
     try:
@@ -249,7 +255,9 @@ def cmd_sounds(args) -> None:
     except VoiceUnavailable as problem:
         raise Blocked(f"blocked: {problem}") from None
     for text in args.text:
-        print(f"{text}  ->  {engine.tokenizer.phonemize(text)}")
+        said = speech.spoken(text)                    # the built-in respellings (n-th, i-th) apply here as in a video
+        via = f"{said}  ->  " if said != text else ""
+        print(f"{text}  ->  {via}{engine.tokenizer.phonemize(said)}")
 
 
 def main(argv=None) -> None:
