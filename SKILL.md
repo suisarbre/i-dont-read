@@ -1,6 +1,6 @@
 ---
 name: i-dont-read
-description: Turn a codebase, file, document, article or pasted text into a short narrated explainer video (mp4) that shows the real source on screen with highlights, infographics, voice-over, sound effects and chapters. Use when the user says "explain this as a video", "make a video about this repo / file / doc", "I don't want to read this, show me".
+description: Turn a codebase, a file or document, a commit or pull request, a web page, a PDF or pasted text into a short narrated explainer video (mp4) that shows the real source on screen with highlights, infographics, voice-over, sound effects and chapters. Use when the user says "explain this as a video", "make a video about this repo / file / doc / PR / page", "I don't want to read this, show me".
 ---
 
 # I don't read

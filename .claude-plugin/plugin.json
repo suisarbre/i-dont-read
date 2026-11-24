@@ -1,0 +1,13 @@
+{
+  "name": "i-dont-read",
+  "displayName": "I don't read",
+  "description": "Explains a codebase, a document, a commit or pull request, a web page or a PDF as a short narrated video, with the real source on screen.",
+  "author": {
+    "name": "suisarbre",
+    "url": "https://github.com/suisarbre"
+  },
+  "homepage": "https://github.com/suisarbre/i-dont-read",
+  "repository": "https://github.com/suisarbre/i-dont-read",
+  "license": "MIT",
+  "keywords": ["explainer-video", "video", "code-explanation", "text-to-speech", "agent-skill"]
+}
