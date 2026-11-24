@@ -330,9 +330,10 @@ def _quote(b: _Builder, spec: dict, kicker: str) -> Scene:
     for act in _actions(spec):
         phrases = act.get("mark") or []
         for phrase in [phrases] if isinstance(phrases, str) else phrases:
-            needle = source.clean(phrase)
             for p, para in enumerate(paragraphs):
-                at = para.find(needle)
+                # As it appears on screen, or as copied from the raw Markdown.
+                needle = next((n for n in (" ".join(phrase.split()), source.clean(phrase)) if n and n in para), None)
+                at = para.find(needle) if needle else -1
                 if at >= 0:
                     if any(s < at + len(needle) and at < e for s, e, _ in found[p]):
                         raise StoryboardError(f"{where}: mark {phrase!r} overlaps an earlier mark")

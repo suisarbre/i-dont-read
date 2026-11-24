@@ -199,12 +199,21 @@ def diff(root: Path, spec: dict, first: int, last: int) -> tuple[list[dict], str
 # --- prose -------------------------------------------------------------------
 
 def clean(text: str) -> str:
-    """Light Markdown cleanup so quoted prose reads as prose. Applied to excerpts and to marks alike."""
+    """Light Markdown cleanup so quoted prose reads as prose. Applied to excerpts and to marks alike.
+
+    Code spans keep their content exactly (only the backticks go): `*_ore` must not lose its
+    asterisk and underscore to the emphasis rules.
+    """
     text = re.sub(r"!\[([^\]]*)\]\([^)]*\)", r"\1", text)        # images -> alt text
     text = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", text)         # links -> link text
-    text = re.sub(r"(\*\*|__|`)", "", text)                       # bold and code markers
-    text = re.sub(r"(?<!\w)[*_](?=\S)|(?<=\S)[*_](?!\w)", "", text)  # emphasis markers
-    return re.sub(r"\s+", " ", text).strip()
+    out = []
+    for part in re.split(r"(`[^`]*`)", text):
+        if len(part) >= 2 and part[0] == part[-1] == "`":
+            out.append(part[1:-1])
+            continue
+        part = re.sub(r"(\*\*|__)", "", part)                       # bold markers
+        out.append(re.sub(r"(?<!\w)[*_](?=\S)|(?<=\S)[*_](?!\w)", "", part))   # emphasis markers
+    return re.sub(r"\s+", " ", "".join(out)).strip()
 
 
 def excerpt(root: Path, file: str, first: int, last: int, ref: str | None = None,

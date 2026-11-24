@@ -395,7 +395,11 @@
     while (k > 0.55 && top + list.getBoundingClientRect().height > G.bottom) {
       k -= 0.05;
       inner.style.zoom = k;
-      inner.style.width = `${100 / k}%`;
+      // Keep the list as wide as its column. Browsers disagree on whether a percentage width is
+      // taken before or after zoom, so measure instead of assuming.
+      inner.style.width = '100%';
+      const got = inner.getBoundingClientRect().width, want = list.getBoundingClientRect().width;
+      if (got && Math.abs(got - want) > 1) inner.style.width = `${100 * want / got}%`;
     }
     for (const op of scene.ops) {
       if (op.op === 'reveal') { parts[op.item].o.to(op.t, 1, 0.4); parts[op.item].y.to(op.t, 0, 0.45); }
