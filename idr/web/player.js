@@ -458,16 +458,25 @@
       html.style.setProperty('--H', `${G.H}px`);
       html.style.setProperty('--padX', `${G.padX}px`);
       html.style.setProperty('--top', `${G.top}px`);
-      await Promise.all([
-        '500 20px "IDR Serif"', '400 20px "IDR Sans"', '500 20px "IDR Sans"', '600 20px "IDR Sans"',
-        '400 20px "IDR Mono"', '600 20px "IDR Mono"',
-      ].map(f => document.fonts.load(f)));
+      // Every face must be in before anything is measured: a block fitted with a fallback font
+      // is the wrong size once the real one arrives.
+      await Promise.all([...document.fonts].map(face => face.load()));
 
       const root = document.getElementById('scene');
       const kind = scene.type === 'diff' ? 'code' : scene.type;
-      root.className = `scene ${kind}`;
+      root.className = `scene ${kind}${scene.type === 'diff' ? ' diff' : ''}`;
       root.innerHTML = '';
+      root.style.transform = '';
       await builders[kind](root, scene);
+
+      // A tall frame has height to spare. Centre the header and its block together
+      // instead of leaving them at the top with an empty lower half.
+      if (G === FORMATS.tall && kind !== 'title') {
+        const bottoms = [...root.children].filter(c => !c.classList.contains('note'))
+          .map(c => c.getBoundingClientRect().bottom);
+        const slack = G.bottom - Math.max(...bottoms);
+        if (slack > 60) root.style.transform = `translateY(${Math.round(slack * 0.45)}px)`;
+      }
 
       const cap = document.querySelector('#caption span');
       const capText = switcher('', v => { cap.textContent = v; cap.style.display = v ? '' : 'none'; });
