@@ -146,7 +146,7 @@
     // Tall frames wrap long lines, so the font follows a comfortable line length instead.
     const padY = 24, room = G.bottom - top - 2 * padY;
     const longest = Math.max(...scene.rows.map(r => r.len), 1);
-    const gutterEm = diff ? 7.6 : 4.4;
+    const gutterEm = diff ? 8.4 : 4.6;                 // line numbers (two columns and a sign on a diff), in ems
     const apply = font => {
       lines.style.fontSize = `${font}px`;
       lines.style.lineHeight = `${Math.round(font / 0.56)}px`;

@@ -27,7 +27,7 @@ FORMATS = ("wide", "tall")
 
 # Layout limits. Past these a scene stops being readable.
 MAX_CODE_LINES = 16
-MAX_CODE_COLS = 96
+MAX_CODE_COLS = 120   # the font shrinks to fit the longest line; past this it is too small to read
 MAX_QUOTE_CHARS = 640
 MAX_SAY_CHARS = 260
 
@@ -267,8 +267,10 @@ def _check_rows(b: _Builder, rows: list[dict], where: str) -> None:
         raise StoryboardError(f"{where} is {len(rows)} lines; show at most {MAX_CODE_LINES} per scene "
                               "(split it into two scenes)")
     widest = max(row["len"] for row in rows)
-    if widest > MAX_CODE_COLS and b.fmt == "wide":
-        b.warn(where, f"a line is {widest} columns wide; it will be cut off past about {MAX_CODE_COLS}")
+    limit = MAX_CODE_COLS - (6 if any(row["kind"] for row in rows) else 0)   # a diff spends columns on its gutter
+    if widest > limit and b.fmt == "wide":
+        b.warn(where, f"a line is {widest} columns wide, so the code will be small (over {limit}); "
+                      "show fewer or shorter lines")
 
 
 def _expect(spec: dict, rows: list[dict], where: str) -> None:
@@ -283,13 +285,19 @@ def _expect(spec: dict, rows: list[dict], where: str) -> None:
                               "the file has changed, so fix the line range")
 
 
+def _where(spec: dict, first: int, last: int) -> str:
+    """The line under a heading that says exactly what is on screen: file, lines, and the git ref if not the current file."""
+    at = f"  ·  as of {spec['ref']}" if spec.get("ref") else ""
+    return f"{spec['file']}  ·  lines {first}–{last}{at}"
+
+
 def _code(b: _Builder, spec: dict, kicker: str) -> Scene:
     first, last = spec["lines"]
     where = f"{spec['file']}:{first}-{last}"
-    rows = source.extract(b.root, spec["file"], first, last)
+    rows = source.extract(b.root, spec["file"], first, last, spec.get("ref"))
     _expect(spec, rows, where)
     _check_rows(b, rows, where)
-    scene = b.scene("code", kicker, {**spec, "sub": f"{spec['file']}  ·  lines {first}–{last}"}, rows=rows)
+    scene = b.scene("code", kicker, {**spec, "sub": _where(spec, first, last)}, rows=rows)
     scene.sfx.append((0.0, "whoosh"))
     _lines(b, scene, spec, where, {first + i: i for i in range(len(rows))})
     return scene
@@ -311,7 +319,7 @@ def _diff(b: _Builder, spec: dict, kicker: str) -> Scene:
 def _quote(b: _Builder, spec: dict, kicker: str) -> Scene:
     first, last = spec["lines"]
     where = f"{spec['file']}:{first}-{last}"
-    paragraphs = source.excerpt(b.root, spec["file"], first, last)
+    paragraphs = source.excerpt(b.root, spec["file"], first, last, spec.get("ref"))
     size = sum(len(p) for p in paragraphs)
     if size > MAX_QUOTE_CHARS:
         raise StoryboardError(f"{where} is {size} characters of text; quote at most {MAX_QUOTE_CHARS} per scene")
@@ -349,7 +357,7 @@ def _quote(b: _Builder, spec: dict, kicker: str) -> Scene:
             parts.append({"text": para[pos:]})
         segments.append(parts)
 
-    scene = b.scene("quote", kicker, {**spec, "sub": f"{spec['file']}  ·  lines {first}–{last}"}, paragraphs=segments)
+    scene = b.scene("quote", kicker, {**spec, "sub": _where(spec, first, last)}, paragraphs=segments)
     scene.sfx.append((0.0, "whoosh"))
     clock = _Clock(b, scene, where)
     for beat in spec.get("beats", []):

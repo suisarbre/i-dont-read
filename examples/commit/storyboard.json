@@ -1,0 +1,89 @@
+{
+  "title": "Commit 5983353: a font bug, tall layout, and diff highlights",
+  "intro": { "say": "One commit, three changes: a font bug fixed, tall videos centred, and a cleaner highlight on diffs." },
+  "chapters": [
+    {
+      "title": "Text measured with the wrong font",
+      "say": "Why was quoted text spilling into the captions?",
+      "scenes": [
+        {
+          "type": "code",
+          "heading": "Before: six fonts, loaded by name",
+          "file": "idr/web/player.js",
+          "ref": "76cacba",
+          "lines": [461, 464],
+          "expect": "await Promise.all([",
+          "beats": [
+            { "say": "The author describes the bug this way: quoted text was fitted with a fallback font, and came out the wrong size once the real one arrived." },
+            { "say": "Here is the old code. Before measuring anything, it waited for a fixed list of six font faces.", "at": "a fixed list", "highlight": [462, 463], "note": "6 faces" }
+          ]
+        },
+        {
+          "type": "stats",
+          "heading": "The list was short",
+          "items": [
+            { "value": "6", "label": "faces the old code waited for", "note": "idr/web/player.js as of 76cacba" },
+            { "value": "8", "label": "faces the stylesheet declares", "note": "@font-face rules in idr/web/theme.css" }
+          ],
+          "beats": [
+            { "say": "Six faces were on that list, but the stylesheet declares eight.", "reveal": 1, "cues": [ { "at": "the stylesheet", "reveal": 2 } ] }
+          ]
+        },
+        {
+          "type": "diff",
+          "heading": "After: every declared face",
+          "file": "idr/web/player.js",
+          "from": "76cacba",
+          "to": "5983353",
+          "lines": [461, 463],
+          "expect": "// Every face must be in",
+          "beats": [
+            { "say": "The fix drops the list.", "show": "removed" },
+            { "say": "Instead, it asks the page for every font it declares, and waits for all of them.", "highlight": 463, "note": "all declared faces" },
+            { "say": "So a block is never sized with a font that is about to be replaced.", "highlight": [461, 462] }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Tall videos, centred",
+      "say": "What changes for vertical videos?",
+      "scenes": [
+        {
+          "type": "diff",
+          "heading": "Centre what was built",
+          "file": "idr/web/player.js",
+          "from": "76cacba",
+          "to": "5983353",
+          "lines": [472, 479],
+          "expect": "// A tall frame has height to spare.",
+          "beats": [
+            { "say": "A tall frame now centres the header and its block together, instead of leaving them at the top.", "highlight": [472, 473] },
+            { "say": "It plugs in right after a scene is built, and it skips title cards.", "at": "skips title cards", "highlight": 474, "note": "not title cards" },
+            { "say": "It measures the space left above the captions, and moves everything down by a little under half of it.",
+              "highlight": 477, "cues": [ { "at": "moves everything down", "highlight": 478, "note": "45% of the slack" } ] },
+            { "say": "With sixty pixels of room or less, it leaves the layout alone.", "highlight": 478 }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "A cleaner highlight on diffs",
+      "say": "The last change is two lines of styling.",
+      "scenes": [
+        {
+          "type": "compare",
+          "heading": "Highlighting a changed line",
+          "columns": [
+            { "title": "Before", "points": [ "A second tint on top of the row", "It muddied the green and red" ] },
+            { "title": "After", "points": [ "An outline around the row", "The row keeps its own colour" ] }
+          ],
+          "beats": [
+            { "say": "On a diff, rows already carry colour, so a highlight that tints them again muddies both.", "reveal": 1 },
+            { "say": "Now the highlight is an outline, and the green and red stay clean.", "reveal": 2 }
+          ]
+        }
+      ]
+    }
+  ]
+}
