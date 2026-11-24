@@ -294,7 +294,7 @@ def _where(spec: dict, first: int, last: int) -> str:
 def _code(b: _Builder, spec: dict, kicker: str) -> Scene:
     first, last = spec["lines"]
     where = f"{spec['file']}:{first}-{last}"
-    rows = source.extract(b.root, spec["file"], first, last, spec.get("ref"))
+    rows = source.extract(b.root, spec["file"], first, last, spec.get("ref"), spec.get("encoding"))
     _expect(spec, rows, where)
     _check_rows(b, rows, where)
     scene = b.scene("code", kicker, {**spec, "sub": _where(spec, first, last)}, rows=rows)
@@ -319,7 +319,7 @@ def _diff(b: _Builder, spec: dict, kicker: str) -> Scene:
 def _quote(b: _Builder, spec: dict, kicker: str) -> Scene:
     first, last = spec["lines"]
     where = f"{spec['file']}:{first}-{last}"
-    paragraphs = source.excerpt(b.root, spec["file"], first, last, spec.get("ref"))
+    paragraphs = source.excerpt(b.root, spec["file"], first, last, spec.get("ref"), spec.get("encoding"))
     size = sum(len(p) for p in paragraphs)
     if size > MAX_QUOTE_CHARS:
         raise StoryboardError(f"{where} is {size} characters of text; quote at most {MAX_QUOTE_CHARS} per scene")
@@ -466,22 +466,31 @@ def _image(b: _Builder, spec: dict, kicker: str) -> Scene:
     finds = sorted({r["find"] for r in regions if isinstance(r, dict)})
     pic = picture.resolve(b.root, spec, finds)
 
-    def region(value) -> list[float]:
+    def rects(value) -> list[list[float]]:
+        """A region as boxes: one per line for text found on the page, one for coordinates."""
         if isinstance(value, dict):
             hit = pic["found"].get(value["find"])
             if hit is None:
                 raise StoryboardError(f"{where}: the text {value['find']!r} is not on the page; "
                                       "it must be copied exactly from what is shown")
-            pad = 0.006                                 # a little air around the words, the same on every side
-            x, y, w, h = hit
+            pad = 0.006 if len(hit) == 1 else 0.003     # a little air around the words
             py = pad * pic["iw"] / pic["ih"]
-            x0, y0, x1, y1 = max(0, x - pad), max(0, y - py), min(1, x + w + pad), min(1, y + h + py)
-            return [round(v, 5) for v in (x0, y0, x1 - x0, y1 - y0)]
+            out = []
+            for x, y, w, h in hit:
+                x0, y0, x1, y1 = max(0, x - pad), max(0, y - py), min(1, x + w + pad), min(1, y + h + py)
+                out.append([round(v, 5) for v in (x0, y0, x1 - x0, y1 - y0)])
+            return out
         if len(value) != 4 or not all(0 <= v <= 1 for v in value):
             raise StoryboardError(f"{where}: a region is [x, y, width, height], each from 0 to 1, not {value!r}")
-        return list(value)
+        return [list(value)]
 
-    boxes: list[list[float]] = []
+    def around(boxes: list[list[float]]) -> list[float]:
+        """The single rectangle that holds all of a region's boxes, for the camera to frame."""
+        x0, y0 = min(b[0] for b in boxes), min(b[1] for b in boxes)
+        x1, y1 = max(b[0] + b[2] for b in boxes), max(b[1] + b[3] for b in boxes)
+        return [round(v, 5) for v in (x0, y0, x1 - x0, y1 - y0)]
+
+    boxes: list[list[list[float]]] = []
     scene = b.scene("image", kicker, {**spec, "sub": spec.get("sub") or pic["label"]},
                     src=pic["path"].as_uri(), iw=pic["iw"], ih=pic["ih"], stamp=pic["stamp"], boxes=boxes)
     ops = scene.payload["ops"]
@@ -490,11 +499,11 @@ def _image(b: _Builder, spec: dict, kicker: str) -> Scene:
     for beat in spec.get("beats", []):
         for t, act, _ in clock.beat(beat):
             if "zoom" in act:
-                ops.append({"op": "cam", "t": t, "region": region(act["zoom"]) if act["zoom"] else None})
+                ops.append({"op": "cam", "t": t, "region": around(rects(act["zoom"])) if act["zoom"] else None})
                 scene.sfx.append((t, "zoom"))
             if "box" in act:
                 if act["box"]:
-                    boxes.append(region(act["box"]))
+                    boxes.append(rects(act["box"]))
                     ops.append({"op": "box", "t": round(t + (0.5 if "zoom" in act else 0.0), 3), "id": len(boxes) - 1})
                     scene.sfx.append((ops[-1]["t"], "tick"))
                 else:
