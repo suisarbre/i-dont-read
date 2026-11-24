@@ -106,6 +106,7 @@ A **beat** is one spoken sentence plus what changes on screen when that sentence
 | `steps` | An ordered list: how to do something, or what you need from the user | `items: [{ "title", "detail", "cmd" }]` (1 to 6; `cmd` shows a command in monospace) | `reveal`: how many steps are visible from now on |
 | `math` | A formula is the point: from the source, or one you write to explain it | From the source: `file` (`.tex` or `.md`), `lines: [first, last]`, `expect`, optional `ref`. The range's display math (`$$...$$`, `\[...\]`, `equation`/`align`/`gather` environments) is shown as written. Written for the video: `tex`, a list of LaTeX formulas, one per line. 1 to 4 formulas | `reveal`: how many formulas are visible from now on. `mark`: `{ "line": n, "tex": "part of that formula's LaTeX" }` (or a list) runs a marker over that term; `null` clears all marks. `note`: a short label under the latest mark |
 | `table` | Rows and columns: results, options, a comparison of several things | From the source: `file` with `lines: [first, last]` around a Markdown table, or a `.csv`/`.tsv` with `rows: [first, last]` (data rows after the header) and optional `columns` (names or 1-based numbers, in the order to show). Written for the video: `header` and `rows`, plus `source` for a credit line | `reveal`: how many rows are visible (the header always is). `highlight`: `{ "row": n }`, `{ "col": name or n }` or `{ "cell": [n, col] }` (`null` clears). `note`: a short label by the highlight |
+| `plot` | The source is about mathematics, and the shape of a function is the point | `expr`: a formula in `x`, or `curves`: 1 to 3 of them (a string, or `{ "expr", "name" }` where `name` is one letter, as in f for f(x)). `x: [from, to]`. Optional `y: [from, to]` (chosen from the curves if left out), `xlabel`, `ylabel`, and `source` for a credit line | `reveal`: how many curves are drawn from now on. `point`: `{ "x": 2 }` marks the curve there and labels its coordinates. `tangent`: `{ "x": 2 }` draws the tangent and labels its slope. `shade`: `{ "from": 0, "to": 2 }` fills the area down to the x axis and labels it. Each takes `"on": n` for the n-th curve, takes a list, stays until the next one of its kind, and is cleared by `null` |
 
 Any beat can also carry `speak` (see section 7) or, with no `say`, a `hold` in seconds. `intro` and a chapter take `speak` beside their `say` too.
 
@@ -128,7 +129,9 @@ Source files are read as UTF-8. For a file in another encoding, add `"encoding"`
 
 Use this when one sentence walks across several lines or items. It reads far better than three short sentences, and the voice model reports when each word is spoken, so the picture lands on the word.
 
-A chapter is usually 1 to 3 scenes. Alternate real source (`code`, `diff`, `quote`, `image`, and `math` or `table` read from a file) with an infographic (`flow`, `compare`, `stats`, and `math` or `table` written for the video) that puts it in context.
+A chapter is usually 1 to 3 scenes. Alternate real source (`code`, `diff`, `quote`, `image`, and `math` or `table` read from a file) with an infographic (`flow`, `compare`, `stats`, `plot`, and `math` or `table` written for the video) that puts it in context.
+
+**Graphs.** A `plot` scene is for mathematics: a function the source defines or reasons about, when seeing its shape, a slope or an area makes the point. Write the formula the way a calculator takes it: `x^2`, `2*x + 1`, `exp(-x^2/2)`, `log2(1/x)`, `sqrt(1 - x^2)`, with `*` for every product and `pi`, `e`, `tau` as constants. The label on screen is typeset from that same formula, and every coordinate, slope and area is computed from it, so do not put those numbers anywhere yourself; say them in `say` only as the preview shows them. It does not draw data. If the source has a chart, show that chart with an `image` scene; if it has only numbers, show them in a `table` or `stats` scene. Do not make a chart the source does not have.
 
 
 ## 5. Web pages
@@ -205,6 +208,7 @@ This is the reason the skill exists, so do not work around it.
 - `code`, `diff` and `quote` scenes show only what is in the file at those lines. Never paste code or prose into the storyboard.
 - The same holds for `math` and `table` scenes with `file`: the LaTeX and the cells are shown as the file has them (the one change is that `\label{...}` is dropped). If the source writes a formula as plain text, like `log2 1/p`, do not present your LaTeX version of it as the source: write it in a `math` scene with `tex`, which is shown as an explanation, with no file line.
 - A `math` or `table` scene with `tex` or `header` is your explanation. Every value in a written table must come from the source, as in `stats`; name where in `source`.
+- A `plot` scene is your explanation too. Plot a function the source gives or is plainly about, and say where it is from in `source`. Its points, slopes and areas are worked out by the engine from the formula, so they are exact for what is drawn; they are not a claim the source made unless the source says so.
 - Always set `expect` on a `code` or `diff` scene to a short string from the **first line** of `lines`. It pins the range: the render stops if that line is no longer there. Start the range on a line with something of its own on it, not on a lone brace.
 - A `mark` must be copied exactly from the quoted lines, and a `find` exactly from the page. The render stops if either is not found.
 - An `image` scene shows the real file or the real page. Do not draw or generate a picture and present it as the source.
@@ -221,6 +225,7 @@ This is the reason the skill exists, so do not work around it.
 - `steps`: titles and commands at most 48 characters each.
 - `math`: 1 to 4 formulas per scene. Every formula is parsed with KaTeX by `check`; one that does not parse is an error.
 - `table`: at most 6 columns and 8 rows (4 columns read best in the tall format), and 40 characters per cell.
+- `plot`: 1 to 3 curves. A formula may use numbers, `x`, `+ - * / ^`, parentheses, `pi`, `e`, `tau` and the functions `sin cos tan asin acos atan sinh cosh tanh exp ln log log2 log10 sqrt cbrt abs floor ceil`; anything else is an error. A point, tangent or shaded area must lie inside the graph.
 - Headings: at most 60 characters.
 
 ## 10. Settings

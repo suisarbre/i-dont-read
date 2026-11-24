@@ -182,7 +182,7 @@
               "note": "EFFECTS in idr/sfx.py"
             },
             {
-              "value": "10",
+              "value": "11",
               "label": "kinds of scene",
               "note": "SCENES in idr/plan.py"
             },
@@ -198,7 +198,7 @@
               "reveal": 1
             },
             {
-              "say": "It ships five sound effects and ten kinds of scene.",
+              "say": "It ships five sound effects and eleven kinds of scene.",
               "reveal": 3
             },
             {

@@ -1,0 +1,45 @@
+{
+  "title": "The slope of a curve",
+  "chapters": [
+    {
+      "title": "A slope that changes",
+      "say": "What does it mean for a curve to have a slope?",
+      "scenes": [
+        {
+          "type": "plot",
+          "heading": "A parabola",
+          "expr": "x^2",
+          "name": "f",
+          "x": [-3, 3],
+          "beats": [
+            { "say": "Here is f of x equals x squared.", "reveal": 1 },
+            { "say": "At x equals one, the curve is at height one.", "point": { "x": 1 } },
+            { "say": "The line that just touches it there has slope two.", "tangent": { "x": 1 } },
+            { "say": "Move to x equals two, and the slope doubles to four.", "at": "the slope doubles", "point": { "x": 2 }, "tangent": { "x": 2 } }
+          ]
+        },
+        {
+          "type": "plot",
+          "heading": "The function and its slope",
+          "curves": [ { "expr": "x^2", "name": "f" }, { "expr": "2*x", "name": "g" } ],
+          "x": [-3, 3],
+          "beats": [
+            { "say": "Plot that slope at every x, and you get a straight line: two x.", "reveal": 1, "cues": [ { "at": "a straight line", "reveal": 2 } ] },
+            { "say": "And the area under that line, from zero to two, is four: the height the parabola reached.", "at": "from zero to two", "shade": { "from": 0, "to": 2, "on": 2 }, "point": { "x": 2, "on": 1 } }
+          ]
+        },
+        {
+          "type": "plot",
+          "heading": "Curves with gaps",
+          "curves": [ "1/x", "sin(x)", "sqrt(4 - x^2)" ],
+          "x": [-4, 4],
+          "y": [-3, 3],
+          "source": "Drawn for this example",
+          "beats": [
+            { "say": "A curve is drawn only where its formula has a value, and never across a jump.", "reveal": 3 }
+          ]
+        }
+      ]
+    }
+  ]
+}

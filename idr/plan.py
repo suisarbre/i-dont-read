@@ -12,7 +12,7 @@ from pathlib import Path
 
 import numpy as np
 
-from . import picture, source, texmath
+from . import picture, plot, source, texmath
 
 FPS = 30
 LEAD = 0.9        # entrance animation before the first beat
@@ -33,6 +33,7 @@ MAX_SAY_CHARS = 260
 MAX_MATH_LINES = 4
 MAX_TABLE_COLS = 6
 MAX_TABLE_ROWS = 8
+MAX_CURVES = 3
 MAX_CELL_CHARS = 40
 
 _CODE_LIKE = re.compile(r"[_\\<>{}\[\]=$^]|\w/\w|\w\(\)|\.(py|js|ts|json|md|cpp|hpp|h|rs|go|java|html|css|sh)\b")
@@ -874,8 +875,147 @@ def _check_math(b: _Builder) -> list[str]:
     return problems
 
 
+def _plot(b: _Builder, spec: dict, kicker: str) -> Scene:
+    """The graph of one to three functions of x, with points, tangents and shaded areas computed from them."""
+    where = spec.get("heading") or "plot"
+    given = spec.get("curves") or ([{"expr": spec["expr"], "name": spec.get("name")}] if spec.get("expr") else [])
+    given = [{"expr": c} if isinstance(c, str) else c for c in given]
+    if not 1 <= len(given) <= MAX_CURVES:
+        raise StoryboardError(f'{where}: a plot scene draws 1 to {MAX_CURVES} curves ("expr", or "curves": [...]), '
+                              f"not {len(given)}")
+    x = spec.get("x")
+    if not (isinstance(x, list) and len(x) == 2 and all(isinstance(v, (int, float)) for v in x) and x[0] < x[1]):
+        raise StoryboardError(f'{where}: a plot scene needs "x": [from, to], two numbers with the smaller first')
+    x0, x1 = float(x[0]), float(x[1])
+    try:
+        formulas = [plot.Formula(c.get("expr")) for c in given]
+        if spec.get("y"):
+            y0, y1 = (float(v) for v in spec["y"])
+            if not y0 < y1:
+                raise ValueError('"y": [from, to] needs the smaller number first')
+        else:
+            y0, y1 = plot.view(formulas, x0, x1)
+    except ValueError as problem:
+        raise StoryboardError(f"{where}: {problem}") from None
+
+    curves = []
+    for n, (c, f) in enumerate(zip(given, formulas), 1):
+        name = c.get("name")
+        if name is not None and not re.fullmatch(r"[A-Za-z]", name):
+            raise StoryboardError(f'{where}: a curve\'s "name" is one letter, as in f for f(x); not {name!r}')
+        lines = plot.strokes(f, x0, x1, y0, y1)
+        if not any(y0 <= py <= y1 for line in lines for _, py in line):
+            raise StoryboardError(f"{where}: {f.text!r} is never inside the graph for x from {plot.number(x0)} to "
+                                  f'{plot.number(x1)}; change "x" or "y"')
+        label = f"{name}(x) = {f.tex()}" if name else f"y = {f.tex()}"
+        b.tex.append({"where": f"{where} curve {n}", "tex": label, "display": False, "seg": None, "strict": True})
+        curves.append({"tex": label, "lines": lines})
+
+    def curve(value: dict, what: str) -> int:
+        on = value.get("on", 1)
+        if not isinstance(on, int) or not 1 <= on <= len(curves):
+            raise StoryboardError(f'{where}: {what} is "on" curve {on!r}, but the scene has {len(curves)}')
+        return on - 1
+
+    def inside(i: int, at: float, what: str) -> float:
+        if not x0 <= at <= x1:
+            raise StoryboardError(f"{where}: {what} at x = {plot.number(at)} is outside the graph "
+                                  f"({plot.number(x0)} to {plot.number(x1)})")
+        value = formulas[i](at)
+        if value != value:
+            raise StoryboardError(f"{where}: {formulas[i].text!r} has no value at x = {plot.number(at)}")
+        if not y0 <= value <= y1:
+            raise StoryboardError(f"{where}: {what} at x = {plot.number(at)} is at y = {plot.number(value)}, outside "
+                                  f'the graph ({plot.number(y0)} to {plot.number(y1)}); set "y" to include it')
+        return float(value)
+
+    marks: list[dict] = []
+    owner: dict[int, list[tuple[str, int]]] = {}
+
+    def label(tex: str, what: str) -> str:
+        b.tex.append({"where": f"{where} {what}", "tex": tex, "display": False, "seg": None, "strict": True})
+        return tex
+
+    # Everything drawn on a curve is worked out from its formula here, never typed into the storyboard.
+    for act in _actions(spec):
+        for kind in ("point", "tangent", "shade"):
+            value = act.get(kind)
+            if not value:
+                continue
+            for item in [value] if isinstance(value, dict) else value:
+                if not isinstance(item, dict):
+                    raise StoryboardError(f'{where}: "{kind}" takes an object such as {{"x": 1}}, or a list of them')
+                i = curve(item, f"a {kind}")
+                f = formulas[i]
+                if kind == "shade":
+                    if not all(isinstance(item.get(k), (int, float)) for k in ("from", "to")) or item["from"] >= item["to"]:
+                        raise StoryboardError(f'{where}: "shade" needs "from" and "to", two x values, smaller first')
+                    lo, hi = float(item["from"]), float(item["to"])
+                    inside(i, lo, "the shaded area"), inside(i, hi, "the shaded area")
+                    area = f.area(lo, hi)
+                    if area != area:
+                        raise StoryboardError(f"{where}: {f.text!r} has no value somewhere between x = "
+                                              f"{plot.number(lo)} and {plot.number(hi)}, so there is no area to shade")
+                    xs = [lo + (hi - lo) * k / 160 for k in range(161)]
+                    ys = [min(max(v, y0), y1) for v in f(xs).tolist()]
+                    sign = r"\approx" if plot.rounded(area) else "="
+                    marks.append({"kind": "shade", "curve": i, "outline": [[round(a, 6), round(v, 6)] for a, v in zip(xs, ys)],
+                                  "tex": label(rf"\text{{area}} {sign} {plot.number(area)}", "area")})
+                else:
+                    if not isinstance(item.get("x"), (int, float)):
+                        raise StoryboardError(f'{where}: "{kind}" needs "x", the place on the curve')
+                    at = float(item["x"])
+                    value_y = inside(i, at, f"the {kind}")
+                    if kind == "point":
+                        marks.append({"kind": "point", "curve": i, "x": at, "y": value_y,
+                                      "tex": label(rf"\left({plot.number(at)},\ {plot.number(value_y)}\right)", "point")})
+                    else:
+                        slope = f.slope(at, x1 - x0)
+                        if slope != slope:
+                            raise StoryboardError(f"{where}: {f.text!r} has no slope at x = {plot.number(at)}")
+                        sign = r"\approx" if plot.rounded(slope) else "="
+                        marks.append({"kind": "tangent", "curve": i, "x": at, "y": value_y, "slope": slope,
+                                      "tex": label(rf"\text{{slope}} {sign} {plot.number(slope)}", "slope")})
+                owner.setdefault(id(act), []).append((kind, len(marks) - 1))
+
+    on = _math_on(b, spec)
+    scene = b.scene("plot", kicker, spec, x=[x0, x1], y=[y0, y1], curves=curves, marks=marks,
+                    xticks=[[v, plot.minus(plot.number(v))] for v in plot.ticks(x0, x1, 10 if b.fmt == "wide" else 6)],
+                    yticks=[[v, plot.minus(plot.number(v))] for v in plot.ticks(y0, y1, 7 if b.fmt == "wide" else 9)],
+                    xlabel=spec.get("xlabel", "x"), ylabel=spec.get("ylabel", "y"),
+                    credit=b.rich(spec.get("source"), on, where))
+    scene.sfx.append((0.0, "whoosh"))
+    ops = scene.payload["ops"]
+    clock = _Clock(b, scene, where)
+    stage = _Stage(scene, len(curves), "curve", _staged(spec))
+    shown: dict[str, list[int]] = {"point": [], "tangent": [], "shade": []}
+    for beat in spec.get("beats", []):
+        for t, act, src in clock.beat(beat):
+            if "reveal" in act:
+                stage.upto(act["reveal"], t)
+            for kind in shown:
+                if kind not in act:
+                    continue
+                for mid in shown[kind]:                # a new point, tangent or area replaces the ones of its kind
+                    ops.append({"op": "hide", "t": t, "mark": mid})
+                shown[kind] = [mid for k, mid in owner.get(id(src), []) if k == kind]
+                for j, mid in enumerate(shown[kind]):
+                    if marks[mid]["curve"] >= stage.visible:
+                        b.warn(where, f"a {kind} is on curve {marks[mid]['curve'] + 1} before that curve is revealed")
+                    at = round(t + 0.12 + j * 0.3, 3)
+                    ops.append({"op": "show", "t": at, "mark": mid})
+                    scene.sfx.append((at, "mark" if kind == "shade" else "tick"))
+    stage.upto(len(curves), clock.t)
+    first = min((op["t"] for op in ops if op["op"] == "reveal"), default=0.0)
+    if first > LEAD + 1.0:
+        b.warn(where, f"the graph is empty for the first {first:.1f} seconds; draw the first curve when the first "
+                      "sentence starts")
+    clock.finish()
+    return scene
+
+
 SCENES = {"code": _code, "diff": _diff, "quote": _quote, "image": _image, "flow": _flow, "compare": _compare,
-          "stats": _stats, "steps": _steps, "math": _math, "table": _table}
+          "stats": _stats, "steps": _steps, "math": _math, "table": _table, "plot": _plot}
 OVERVIEW_FROM = 3   # videos with this many chapters open with a card that lists them
 
 

@@ -619,6 +619,132 @@
   };
 
   // A real picture (image file, web page capture, PDF page) with a camera that zooms to regions.
+  // The graph of functions of x. plan.py sampled the curves and worked out every point, slope and area;
+  // this only places them.
+  builders.plot = (root, scene) => {
+    const t0 = header(root, scene);
+    const top = below(root, 30);
+    const tall = G === FORMATS.tall;
+    const W = G.W - 2 * G.padX;
+    const wrap = root.appendChild(el('div', 'plotwrap'));
+    wrap.style.top = `${top}px`;
+    const legend = wrap.appendChild(el('div', 'legend'));
+    const keys = scene.curves.map((c, i) => {
+      const key = legend.appendChild(el('div', `key c${i + 1}`));
+      key.appendChild(el('span', 'swatch'));
+      tex(key.appendChild(el('span', 'name')), c.tex, false);
+      return anim(key, { o: 0 });
+    });
+    let font = tall ? 34 : 38;                         // the legend stays on one line where it can
+    legend.style.fontSize = `${font}px`;
+    while (font > 22 && legend.scrollWidth > legend.clientWidth + 1) { font -= 2; legend.style.fontSize = `${font}px`; }
+    const room = G.bottom - top - legend.getBoundingClientRect().height - (scene.credit ? 46 : 0);
+    const H = Math.round(Math.min(room, tall ? W * 0.92 : room));
+    const NS = 'http://www.w3.org/2000/svg';
+    const make = (tag, attrs, parent) => {
+      const node = document.createElementNS(NS, tag);
+      for (const [k, v] of Object.entries(attrs || {})) node.setAttribute(k, v);
+      if (parent) parent.appendChild(node);
+      return node;
+    };
+    const svg = make('svg', { class: 'graph', width: W, height: H, viewBox: `0 0 ${W} ${H}` }, wrap);
+    if (scene.credit) wrap.appendChild(el('div', 'credit', scene.credit));
+    const m = { l: tall ? 84 : 104, r: 44, t: 44, b: 62 };
+    const pw = W - m.l - m.r, ph = H - m.t - m.b;
+    const [x0, x1] = scene.x, [y0, y1] = scene.y;
+    const px = x => m.l + (x - x0) / (x1 - x0) * pw;
+    const py = y => m.t + (y1 - y) / (y1 - y0) * ph;
+    const f2 = v => v.toFixed(2);
+
+    // Grid, axes and their numbers.
+    const axisY = y0 <= 0 && 0 <= y1 ? py(0) : m.t + ph, axisX = x0 <= 0 && 0 <= x1 ? px(0) : m.l;
+    const back = make('g', {}, svg);
+    for (const [v, label] of scene.xticks) {
+      make('line', { class: 'grid', x1: f2(px(v)), x2: f2(px(v)), y1: m.t, y2: m.t + ph }, back);
+      make('text', { class: 'tick', x: f2(px(v)), y: m.t + ph + 38, 'text-anchor': 'middle' }, back).textContent = label;
+    }
+    for (const [v, label] of scene.yticks) {
+      make('line', { class: 'grid', x1: m.l, x2: m.l + pw, y1: f2(py(v)), y2: f2(py(v)) }, back);
+      make('text', { class: 'tick', x: m.l - 16, y: f2(py(v) + 8), 'text-anchor': 'end' }, back).textContent = label;
+    }
+    make('rect', { class: 'edge', x: m.l, y: m.t, width: pw, height: ph }, back);
+    make('line', { class: 'axis', x1: m.l, x2: m.l + pw, y1: f2(axisY), y2: f2(axisY) }, back);
+    make('line', { class: 'axis', x1: f2(axisX), x2: f2(axisX), y1: m.t, y2: m.t + ph }, back);
+    // Axis names sit just outside the plot area, where no curve can run through them.
+    make('text', { class: 'axisname', x: m.l + pw + m.r / 2, y: f2(axisY + 9), 'text-anchor': 'middle' }, back).textContent = scene.xlabel;
+    make('text', { class: 'axisname', x: f2(axisX), y: m.t - 10, 'text-anchor': 'middle' }, back).textContent = scene.ylabel;
+    enter(wrap, t0 + 0.05, 30, 0.6);
+
+    const defs = make('defs', {}, svg);
+    make('rect', { x: m.l, y: m.t, width: pw, height: ph }, make('clipPath', { id: 'plot-area' }, defs));
+    const inside = make('g', { 'clip-path': 'url(#plot-area)' }, svg);
+    const shades = make('g', {}, inside), lines = make('g', {}, inside), over = make('g', {}, inside);
+    const dots = make('g', {}, svg);
+
+    // Curves are drawn from left to right, the way one is sketched.
+    const draw = scene.curves.map((c, i) => {
+      const wipe = make('rect', { x: m.l, y: m.t, width: 0, height: ph }, make('clipPath', { id: `plot-wipe-${i}` }, defs));
+      const g = make('g', { 'clip-path': `url(#plot-wipe-${i})`, class: `curve c${i + 1}` }, lines);
+      for (const line of c.lines) {
+        make('path', { d: line.map(([x, y], k) => `${k ? 'L' : 'M'}${f2(px(x))} ${f2(py(y))}`).join(' ') }, g);
+      }
+      return track(0, v => { wipe.setAttribute('width', f2(v * pw)); });
+    });
+
+    // A label is an HTML box over the graph, so it can hold typeset math. It is kept inside the plot area.
+    const at = svg.getBoundingClientRect(), base = wrap.getBoundingClientRect();
+    const ox = at.left - base.left, oy = at.top - base.top;
+    const tag = (source, place) => {
+      const node = wrap.appendChild(el('div', 'tag'));
+      tex(node, source, false);
+      const box = node.getBoundingClientRect();
+      const [x, y] = place(box.width, box.height);
+      node.style.left = `${f2(ox + Math.min(Math.max(x, m.l + 6), m.l + pw - box.width - 6))}px`;
+      node.style.top = `${f2(oy + Math.min(Math.max(y, m.t + 6), m.t + ph - box.height - 6))}px`;
+      return anim(node, { o: 0, s: 0.92 });
+    };
+    const fade = (node, to = 1) => track(0, v => { node.style.opacity = (v * to).toFixed(3); });
+    const marks = scene.marks.map(mk => {
+      const cls = `c${mk.curve + 1}`;
+      if (mk.kind === 'shade') {
+        const floor = Math.min(Math.max(0, y0), y1);
+        const pts = mk.outline.map(([x, y]) => `${f2(px(x))} ${f2(py(y))}`);
+        const a = mk.outline[0][0], b = mk.outline[mk.outline.length - 1][0];
+        const area = make('path', { class: `shade ${cls}`, d: `M${f2(px(a))} ${f2(py(floor))} L${pts.join(' L')} L${f2(px(b))} ${f2(py(floor))} Z` }, shades);
+        const mid = mk.outline[Math.floor(mk.outline.length / 2)];
+        const label = tag(mk.tex, (w, h) => [px((a + b) / 2) - w / 2, (py(mid[1]) + py(floor)) / 2 - h / 2]);
+        return { parts: [fade(area)], label };
+      }
+      const X = px(mk.x), Y = py(mk.y);
+      if (mk.kind === 'tangent') {
+        const line = make('line', { class: 'tangent', x1: f2(px(x0)), y1: f2(py(mk.y + mk.slope * (x0 - mk.x))),
+          x2: f2(px(x1)), y2: f2(py(mk.y + mk.slope * (x1 - mk.x))) }, over);
+        const dot = make('circle', { class: `dot ${cls}`, cx: f2(X), cy: f2(Y), r: 8 }, dots);
+        // Under the line, beside the point of contact: a rising line leaves room below and to the right, a
+        // falling one below and to the left. (A point's own label goes above and to the right.)
+        const label = tag(mk.tex, (w, h) => [mk.slope >= 0 ? X + 22 : X - 22 - w, Y + 16]);
+        return { parts: [fade(line), fade(dot)], label };
+      }
+      const guide = make('path', { class: 'guide', d: `M${f2(X)} ${f2(axisY)} L${f2(X)} ${f2(Y)} L${f2(axisX)} ${f2(Y)}` }, over);
+      const dot = make('circle', { class: `dot ${cls}`, cx: f2(X), cy: f2(Y), r: 0 }, dots);
+      const grow = track(0, v => { dot.setAttribute('r', f2(v * 11)); });
+      const label = tag(mk.tex, (w, h) => [X + 18 + w > m.l + pw ? X - 18 - w : X + 18, Y - 18 - h < m.t ? Y + 18 : Y - 18 - h]);
+      return { parts: [fade(guide), grow], label };
+    });
+
+    for (const op of scene.ops) {
+      if (op.op === 'reveal') {
+        draw[op.curve].to(op.t, 1, 1.1, easeInOut);
+        keys[op.curve].o.to(op.t, 1, 0.4);
+      } else if (op.op === 'show' || op.op === 'hide') {
+        const mk = marks[op.mark], on = op.op === 'show' ? 1 : 0;
+        mk.parts.forEach(p => p.to(op.t, on, on ? 0.45 : 0.25));
+        mk.label.o.to(op.t + (on ? 0.2 : 0), on, on ? 0.35 : 0.2);
+        mk.label.s.to(op.t + (on ? 0.2 : 0), on ? 1 : 0.92, 0.35);
+      }
+    }
+  };
+
   builders.image = (root, scene) => {
     const t0 = header(root, scene);
     const top = below(root, 36);
