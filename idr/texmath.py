@@ -109,20 +109,61 @@ def _group(text: str, start: int) -> tuple[str, int] | None:
     return None
 
 
-def macros(text: str) -> dict[str, str]:
-    """The author's own commands defined in a LaTeX source: \\newcommand, \\renewcommand, \\def and
-    \\DeclareMathOperator, as the table KaTeX takes. A paper's formulas are written with these; without them
-    its equations do not parse, and with them they are shown as the author meant them.
+class Macros(dict):
+    """The table KaTeX takes (name -> body), plus the commands it cannot take: those with an optional argument,
+    as name -> (number of arguments, default for the first, body). `expand` writes those out."""
 
-    A command with an optional argument is left out (KaTeX has no such thing), as is one that expands to
-    something a video may not show; a formula that uses it then fails the check by name."""
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.optional: dict[str, tuple[int, str, str]] = {}
+
+    def merge(self, other: "Macros") -> None:
+        for name in other:
+            self.optional.pop(name, None)
+        for name in other.optional:
+            self.pop(name, None)
+        self.update(other)
+        self.optional.update(other.optional)
+
+
+def _bracket(text: str, start: int) -> tuple[str, int] | None:
+    """The [...] that opens at `start`: its inside and the position just past it. Brackets inside braces do not close it."""
+    if start >= len(text) or text[start] != "[":
+        return None
+    depth, i = 0, start + 1
+    while i < len(text):
+        c = text[i]
+        if c == "\\":
+            i += 2
+            continue
+        depth += c == "{"
+        depth -= c == "}"
+        if c == "]" and depth == 0:
+            return text[start + 1:i], i + 1
+        i += 1
+    return None
+
+
+def macros(text: str) -> Macros:
+    """The author's own commands defined in a LaTeX source: \\newcommand, \\renewcommand, \\def and
+    \\DeclareMathOperator. A paper's formulas are written with these; without them its equations do not
+    parse, and with them they are shown as the author meant them.
+
+    A command that expands to something a video may not show is left out; a formula that uses it then fails
+    the check by name."""
     text = _COMMENT.sub("", text)
-    found: dict[str, str] = {}
+    found = Macros()
     for m in _NEWCOMMAND.finditer(text):
-        if m.group(3):                                    # [default]: an optional argument
+        if m.group(3):                                    # [default]: the first argument is optional
+            default = _bracket(text, m.end() - 1)
+            body = _group(text, default[1]) if default else None
+            if body and m.group(2):
+                found.pop(m.group(1), None)
+                found.optional[m.group(1)] = (int(m.group(2)), default[0], body[0].strip())
             continue
         body = _group(text, m.end())
         if body:
+            found.optional.pop(m.group(1), None)
             found[m.group(1)] = body[0].strip()
     for m in _DEF.finditer(text):
         body = _group(text, m.end())
@@ -132,7 +173,149 @@ def macros(text: str) -> dict[str, str]:
         body = _group(text, m.end())
         if body:
             found[m.group(2)] = f"\\operatorname{m.group(1)}{{{body[0].strip()}}}"
-    return {name: body for name, body in found.items() if not _UNSAFE.search(body) and name != "\\htmlClass"}
+    for name in [n for n, body in found.items() if _UNSAFE.search(body) or n == "\\htmlClass"]:
+        del found[name]
+    for name in [n for n, (_, default, body) in found.optional.items() if _UNSAFE.search(body + default)]:
+        del found.optional[name]
+    return found
+
+
+def expand(tex: str, optional: dict[str, tuple[int, str, str]]) -> str:
+    """Write out every use of a command that has an optional argument: \\half[L] becomes \\frac{L}{2}.
+    KaTeX has no optional arguments, so these are expanded here, the way LaTeX would."""
+    if not optional:
+        return tex
+    names = re.compile(r"(" + "|".join(re.escape(n) for n in sorted(optional, key=len, reverse=True)) + r")(?![A-Za-z@])")
+    for _ in range(40):                                   # a body may use another such command; stop at a loop
+        m = names.search(tex)
+        if not m:
+            return tex
+        count, default, body = optional[m.group(1)]
+        i = m.end()
+        given = _bracket(tex, i)
+        args = [given[0] if given else default]
+        if given:
+            i = given[1]
+        for _ in range(count - 1):
+            j = i
+            while j < len(tex) and tex[j].isspace():
+                j += 1
+            group = _group(tex, j)
+            if group:
+                args.append(group[0])
+                i = group[1]
+            elif j < len(tex) and tex[j] == "\\":
+                token = re.match(r"\\(?:[A-Za-z@]+|.)", tex[j:])
+                args.append(token.group(0))
+                i = j + token.end()
+            elif j < len(tex):
+                args.append(tex[j])
+                i = j + 1
+            else:
+                args.append("")
+        out = re.sub(r"#(\d)", lambda d: args[int(d.group(1)) - 1] if int(d.group(1)) <= len(args) else "", body)
+        tex = f"{tex[:m.start()]}{{{out}}}{tex[i:]}"
+    return tex
+
+
+# --- the numbers a paper prints beside its equations ----------------------------------------------
+
+_NUMBERED = "equation|align|alignat|flalign|gather|multline|eqnarray"
+_ENV = re.compile(r"\\begin\{(" + _NUMBERED + r")(\*?)\}(.*?)\\end\{\1\2\}", re.S)
+_ONE_NUMBER = ("equation", "multline")
+_NO_NUMBER = re.compile(r"\\(?:nonumber|notag|tag\*?)(?![A-Za-z])")
+# Anything that makes the count something other than 1, 2, 3 from the top of this file.
+_OTHER_COUNT = re.compile(r"\\(?:numberwithin|setcounter\s*\{equation\}|addtocounter\s*\{equation\}|theequation|"
+                          r"begin\{subequations\}|appendix(?![A-Za-z])|(?:re)?newenvironment|eqno|leqno|"
+                          r"documentclass(?:\[[^\]]*\])?\{(?:book|report|memoir|amsbook|scrbook|scrreprt)\})")
+
+
+def _blank_comments(text: str) -> str:
+    return _COMMENT.sub(lambda m: " " * len(m.group(0)), text)
+
+
+def _row_ends(body: str) -> list[int]:
+    """Where each row of an environment's body ends: before every top-level \\\\, and at the end."""
+    ends, depth, nested, i = [], 0, 0, 0
+    while i < len(body):
+        if body.startswith("\\begin{", i):
+            nested += 1
+        elif body.startswith("\\end{", i):
+            nested -= 1
+        if body[i] == "\\":
+            if body.startswith("\\\\", i) and depth == 0 and nested == 0:
+                ends.append(i)
+            i += 2
+            continue
+        depth += body[i] == "{"
+        depth -= body[i] == "}"
+        i += 1
+    ends.append(len(body))
+    return ends
+
+
+def _takes_number(env: str, star: str, body: str) -> list[bool] | None:
+    """For each row, whether LaTeX numbers it; None when that cannot be told from the text."""
+    if star:
+        return []
+    if env in _ONE_NUMBER:
+        return [not _NO_NUMBER.search(body)]
+    rows, start = [], 0
+    for end in _row_ends(body):
+        rows.append(body[start:end])
+        start = end + 2
+    if len(rows) > 1 and not rows[-1].strip():
+        return None                                       # a trailing \\ makes LaTeX number an empty row; packages differ
+    return [not _NO_NUMBER.search(row) for row in rows]
+
+
+def equation_numbers(text: str, start: int, defined: dict | None = None) -> list[int | None] | None | bool:
+    """The numbers LaTeX prints beside the numbered environment that begins at `start` in the file `text`.
+
+    A list with one entry per row (None for a row with no number); False when the block is not one LaTeX
+    numbers (so there is nothing to do); None when the numbers cannot be told from this file alone: the paper
+    counts by section, sets the counter, pulls in other files first, or wraps equations in its own commands.
+    A wrong number is a false label on the source, so the caller then shows none."""
+    clean = _blank_comments(text)
+    here = _ENV.match(clean, start)
+    if not here or here.group(2):
+        return False
+    doc = clean.find("\\begin{document}")
+    if doc == -1 or doc > start or _OTHER_COUNT.search(clean):
+        return None
+    if _ENV.search(clean[:doc]) or re.search(r"\\(?:input|include)\s*\{", clean[doc:start]):
+        return None
+    if any("\\begin{" in body or "\\end{" in body for body in (defined or {}).values()):
+        return None
+    count = 0
+    for m in _ENV.finditer(clean, doc, start):
+        rows = _takes_number(*m.groups())
+        if rows is None:
+            return None
+        count += sum(rows)
+    rows = _takes_number(*here.groups())
+    if rows is None:
+        return None
+    out = []
+    for numbered in rows:
+        count += numbered
+        out.append(count if numbered else None)
+    return out
+
+
+def renumbered(tex: str, numbers: list[int | None] | None) -> str:
+    """A numbered environment with the paper's own numbers written in as tags (KaTeX would count from 1 in
+    every scene), or with no numbers when they are not known."""
+    m = re.match(r"\\begin\{(" + _NUMBERED + r")\}(.*)\\end\{\1\}\s*$", tex, re.S)
+    if not m:
+        return tex
+    env, body = m.groups()
+    if numbers:
+        ends = [len(body.rstrip())] if env in _ONE_NUMBER else _row_ends(body)
+        for end, number in reversed(list(zip(ends, numbers))):
+            if number is not None:
+                body = f"{body[:end]} \\tag{{{number}}} {body[end:]}"
+    return f"\\begin{{{env}*}}{body}\\end{{{env}*}}"
 
 
 def included(text: str) -> list[str]:

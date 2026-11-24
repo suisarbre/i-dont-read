@@ -62,13 +62,20 @@ def _need_tools() -> None:
         raise Blocked(f"blocked: no Chrome or Chromium found. Send the user this video instead: {env.HELP / 'chrome.mp4'}")
 
 
-def _report(scenes: list, warnings: list[str], estimated: bool) -> float:
+def _report(scenes: list, warnings: list[str], guessed: int = 0) -> float:
+    """List the scenes with their lengths. `guessed` is how many sentences have a length that is only estimated."""
     total = sum(s.duration for s in scenes)
     for i, s in enumerate(scenes, 1):
         p = s.payload
-        mark = f"== {s.chapter}" if s.chapter else f"   {p.get('heading') or ''}"
+        heading = p.get("heading") or ""
+        if isinstance(heading, list):                     # a heading with $math$ in it: list it as it was written
+            heading = "".join(part.get("text") or part.get("raw", "") for part in heading)
+        mark = f"== {s.chapter}" if s.chapter else f"   {heading}"
         print(f"{i:>3}  {p['type']:<8}{s.duration:>6.1f}s  {mark}")
-    print(f"total {'about ' if estimated else ''}{total:.0f}s ({total / 60:.1f} min), {len(scenes)} scenes")
+    print(f"total {'about ' if guessed else ''}{total:.0f}s ({total / 60:.1f} min), {len(scenes)} scenes")
+    if guessed:
+        print(f"       {guessed} sentence(s) not spoken yet, so their lengths are estimates (usually within 5% overall); "
+              "\"check --spoken\" says them now and gives the real length")
     for w in warnings:
         print(f"warning: {w}")
     return total
@@ -103,8 +110,17 @@ def cmd_check(args) -> None:
 
     storyboard, root, opts, board_path = _load(args)
     home = board_path.parent
-    scenes, warnings = plan.build(storyboard, root, opts["theme"], plan.DryNarrator(), opts["captions"], opts["format"], opts["pronounce"], home)
-    _report(scenes, warnings, estimated=True)
+    narrator = plan.DryNarrator(opts["voice"], opts["speed"])
+    if args.spoken:                                       # speak every sentence now: render reuses the clips
+        from .tts import Narrator, VoiceUnavailable
+        narrator = Narrator(opts["voice"], opts["speed"])
+    try:
+        scenes, warnings = plan.build(storyboard, root, opts["theme"], narrator, opts["captions"], opts["format"], opts["pronounce"], home)
+    except Exception as problem:
+        if args.spoken and type(problem).__name__ == "VoiceUnavailable":
+            raise Blocked(f"blocked: {problem}. Check without --spoken for an estimate.") from None
+        raise
+    _report(scenes, warnings, getattr(narrator, "guessed", 0))
     misfits = _misfits(scenes, opts["format"])
     if misfits:
         raise plan.StoryboardError("\n".join(misfits))
@@ -128,15 +144,27 @@ def _misfits(scenes, fmt: str) -> list[str]:
         return []
 
 
-def _moments(scene, every_beat: bool) -> list[float]:
-    """When to look at a scene: once everything in it has settled, and with --beats also just before each change."""
+def _moments(scene, every_beat: bool) -> list[tuple[float, str]]:
+    """When to look at a scene, each with a note for its label: once everything in it has settled, and with
+    --beats also just before each change, and half-way through anything that takes time (a travelling point,
+    a sweep), which no before-and-after pair of frames can show."""
     stops = sorted(set(scene.stops))
     last = stops[-1] if stops else 0.0
     end = max(0.0, min(scene.duration - 0.05, max(scene.duration - 0.75, last + 1.2)))
     if not every_beat:
-        return [end]
-    # A little before the next change: the caption of the sentence that just ended is still up.
-    return [t - (0.24 if t - prev > 1.0 else 0.04) for prev, t in zip(stops, stops[1:]) if t - prev > 0.35] + [end]
+        return [(end, "")]
+    moments = []
+    for prev, t in zip(stops, stops[1:]):
+        if t - prev <= 0.35:
+            continue
+        # A little before the next change, or before the next sentence if that comes first: the frame then
+        # carries the caption of the sentence that made this picture, not the one after it.
+        t = min([t, *(b for b in scene.starts if b > prev + 0.05)])
+        moments.append((max(prev + 0.02, t - (0.24 if t - prev > 1.0 else 0.04)), ""))
+    for op in scene.payload.get("ops", []):
+        if op.get("dur", 0) >= 1.2:
+            moments.append((op["t"] + op["dur"] / 2, "  ·  half-way"))
+    return sorted(moments) + [(end, "")]
 
 
 def _picked(text: str | None, count: int) -> set[int]:
@@ -162,26 +190,28 @@ def cmd_preview(args) -> None:
     storyboard, root, opts, board_path = _load(args)
     home = board_path.parent
     out = Path(args.out).resolve()
-    work = out / ".work" / "preview"
+    name = args.name or board_path.stem
+    work = out / ".work" / "preview" / name               # one folder per storyboard: a follow-up keeps its own frames
     work.mkdir(parents=True, exist_ok=True)
-    for old in work.glob("*.png"):
-        old.unlink()
-    scenes, warnings = plan.build(storyboard, root, opts["theme"], plan.DryNarrator(), opts["captions"], opts["format"], opts["pronounce"], home)
-    _report(scenes, warnings, estimated=True)
+    for old in [*work.glob("*.png"), *out.glob(f"{name}_{_tag(opts)}_preview_*.png")]:
+        old.unlink()                                      # sheets from an earlier, longer run would pass for this one's
+    narrator = plan.DryNarrator(opts["voice"], opts["speed"])
+    scenes, warnings = plan.build(storyboard, root, opts["theme"], narrator, opts["captions"], opts["format"], opts["pronounce"], home)
+    _report(scenes, warnings, narrator.guessed)
     wanted = _picked(args.scenes, len(scenes))
     shots: list[tuple[Path, str]] = []
     with render.Studio(opts["format"]) as studio:
         for i, scene in enumerate(scenes, 1):
             if i not in wanted:
                 continue
-            times = _moments(scene, args.beats)
+            moments = _moments(scene, args.beats)
+            times = [t for t, _ in moments]
             paths = [work / (f"{i:02d}_{k}.png" if len(times) > 1 else f"{i:02d}.png") for k in range(1, len(times) + 1)]
             studio.stills(scene, list(zip(times, paths)))
-            for k, (t, path) in enumerate(zip(times, paths), 1):
+            for k, ((t, note), path) in enumerate(zip(moments, paths), 1):
                 step = f"  ·  {k} of {len(times)}" if len(times) > 1 else ""
-                shots.append((path, f"scene {i}{step}  ·  {t:.1f}s"))
+                shots.append((path, f"scene {i}{step}  ·  {t:.1f}s{note}"))
         _fonts(studio.missing, studio.problems)
-    name = args.name or board_path.stem
     across, (w, h) = (4, (480, 854)) if opts["format"] == "tall" else (2, (960, 540))
     per = across * (1 if opts["format"] == "tall" else 3)
     try:
@@ -217,7 +247,7 @@ def cmd_render(args) -> None:
 
     t0 = time.time()
     if args.silent:                                       # no voice: captions carry the narration
-        narrator, opts["captions"] = plan.DryNarrator(), True
+        narrator, opts["captions"] = plan.DryNarrator("none"), True
     else:
         narrator = Narrator(opts["voice"], opts["speed"])
     try:
@@ -225,7 +255,7 @@ def cmd_render(args) -> None:
     except VoiceUnavailable as problem:
         raise Blocked(f"blocked: {problem}. Render again with --silent to make a captioned video without voice, "
                       f"and send the user this video too: {env.HELP / 'voice-model.mp4'}") from None
-    total = _report(scenes, warnings, estimated=False)
+    total = _report(scenes, warnings)
     print(f"[plan] voice {'none (silent)' if args.silent else opts['voice']}, theme {opts['theme']}, {opts['format']} "
           f"({time.time() - t0:.1f}s)")
 
@@ -300,6 +330,8 @@ def main(argv=None) -> None:
     d.set_defaults(func=cmd_doctor)
     c = sub.add_parser("check", help="validate a storyboard and estimate its length")
     common(c)
+    c.add_argument("--spoken", action="store_true", help="speak every sentence now, so the lengths listed are the "
+                                                        "real ones (render reuses the clips)")
     c.set_defaults(func=cmd_check)
     p = sub.add_parser("preview", help="draw one frame per scene into contact sheets")
     common(p)

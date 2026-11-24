@@ -102,6 +102,13 @@ _SCIENTIFIC = re.compile(r"(?<![\w.])(\d+(?:\.\d+)?)e(-?)(\d+)(?![\w]|\.\d)")
 _GREEK_NEXT = re.compile(rf"(?<=[A-Za-z0-9])(?=[{_GREEK}])|(?<=[{_GREEK}])(?=[A-Za-z0-9])")
 _SPACES = re.compile(r"[ \t]{2,}")
 # The letter a as a quantity, not the article: before an operation or at the end of a clause.
+# A capital A that is a name (the area A, A of x, A prime, matrix A): the voice reads a lone "A" as the
+# article "uh". Inside a sentence a lone capital A is always a name; at the start it is one only when what
+# follows says so ("A of x", "A prime of", "A equals").
+_CAPITAL_A = re.compile(
+    r"(?<=[a-z0-9,;:] )A(?![\w'’-])"
+    r"|(?<![\w'’-])A(?= (?:of [a-zA-Z]\b|prime\b(?! (?:example|number|minister|factor|suspect|candidate|mover|time|cut|rib|location|spot|target))"
+    r"|double prime\b|sub\b|equals\b|squared\b|cubed\b|inverse\b|transpose\b|(?:times|plus|minus) (?:[A-Za-z]\b|\d)))")
 _LETTER_A = re.compile(
     r"(?<![\w'’])([aA])(?="
     r"\s+(?:plus|minus|times|over|equals)\s+(?:[A-Za-z]\b|\d)"                                        # a plus b (not "a plus sign")
@@ -191,6 +198,7 @@ def spoken(text: str, pronounce: dict[str, str] | None = None) -> str:
     text = _WORD.sub(lambda m: _WORDS[m.group(1)], text)
     text = _EIGEN.sub(lambda m: ("E" if m.group(1) == "E" else "e") + "ye-gun-", text)
     text = _SINE.sub("sine", text)
+    text = _CAPITAL_A.sub("eigh", text)
     return _LETTER_A.sub("eigh", text)
 
 

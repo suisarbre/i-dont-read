@@ -93,7 +93,7 @@ class DisplayMath(unittest.TestCase):
         text = "x\n\\begin{align}\n a &= b \\label{e1} \\\\\n c &= d\n\\end{align}\n\\[ y \\]\n$$ z $$\n"
         with tempfile.TemporaryDirectory() as tmp:
             Path(tmp, "p.tex").write_text(text)
-            blocks, _ = source.display_math(Path(tmp), "p.tex", 1, 7)
+            blocks, _, _ = source.display_math(Path(tmp), "p.tex", 1, 7)
         self.assertEqual(len(blocks), 3)
         self.assertNotIn("\\label", blocks[0])
         self.assertTrue(blocks[0].startswith("\\begin{align}"))

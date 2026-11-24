@@ -115,8 +115,8 @@ class Quoted(unittest.TestCase):
 
     def test_the_narration_quotes_what_the_engine_worked_out(self):
         self.assertEqual(self.say("The slope there is {slope}.", tangent={"x": 1.5}), "The slope there is 3.")
-        self.assertEqual(self.say("It sits at {x}, {y:2}.", point={"x": "sqrt(2)"}), "It sits at 1.414, 2.")
-        self.assertEqual(self.say("Area {area:3}.", shade={"from": 0, "to": 2}), "Area 2.67.")
+        self.assertEqual(self.say("It sits at {x}, {y}.", point={"x": "sqrt(2)"}), "It sits at 1.414, 2.")
+        self.assertEqual(self.say("Area {area}.", shade={"from": 0, "to": 2, "digits": 3}), "Area 2.67.")
         self.assertEqual(self.say("First {a.y}, then {b.y}.", point=[{"x": 1, "as": "a"}, {"x": 2, "on": 2, "as": "b"}]),
                          "First 1, then 4.")
         self.assertEqual(self.say("Slope {slope}.", point={"x": -2}, tangent={"x": -2}), "Slope −4.")

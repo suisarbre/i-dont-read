@@ -52,6 +52,7 @@ class Scene:
     sfx: list[tuple[float, str]] = field(default_factory=list)               # (time in scene, effect)
     chapter: str | None = None                      # set on the scene that opens a chapter
     stops: list[float] = field(default_factory=list)   # when something changes on screen (beats and cues)
+    starts: list[float] = field(default_factory=list)  # when each beat (each sentence) begins
 
     @property
     def frames(self) -> int:
@@ -66,12 +67,35 @@ class _DryClip:
 
 
 class DryNarrator:
-    """Stands in for the voice when only checking a storyboard: guesses durations, makes no sound."""
+    """Stands in for the voice when only checking a storyboard: makes no sound. A sentence that has been
+    spoken before on this machine keeps its real length and word timings; any other is estimated."""
 
-    CHARS_PER_SECOND = 16.5
+    voice, speed, guessed = "af_heart", 1.0, 0
+
+    def __init__(self, voice: str = "af_heart", speed: float = 1.0):
+        self.voice, self.speed, self.guessed = voice, float(speed or 1.0), 0
+
+    def estimate(self, text: str) -> float:
+        """Fitted to the voice on a few hundred sentences. Letters alone run 10% short on a sentence full of
+        numbers: the voice says every digit ("six point one four three") and stops at every comma."""
+        letters, digits = sum(c.isalpha() for c in text), sum(c.isdigit() for c in text)
+        points = len(re.findall(r"(?<=\d)\.(?=\d)", text))
+        pauses, stops = len(re.findall(r"[,;:—]", text)), len(re.findall(r"[.!?](?=\s|$)", text))
+        seconds = 0.0564 * letters + 0.4 * digits + 0.3 * points + 0.076 * len(text.split()) + 0.15 * pauses \
+            + 0.335 * stops - 0.66
+        return max(0.6, len(text) / 20, seconds) / self.speed
 
     def say(self, text: str) -> _DryClip:
-        dur = max(0.8, len(text) / self.CHARS_PER_SECOND)
+        known = None
+        try:
+            from .tts import remembered
+            known = remembered(text, self.voice, self.speed)
+        except Exception:                                  # no audio library here: every sentence is an estimate
+            pass
+        if known:
+            return _DryClip(np.zeros(int(known[0] * 24000), dtype=np.float32), known[0], known[1])
+        self.guessed += 1
+        dur = self.estimate(text)
         return _DryClip(np.zeros(int(dur * 24000), dtype=np.float32), dur)
 
 
@@ -114,6 +138,7 @@ class _Builder:
         self.pronounce: dict[str, str] = {}   # written word -> how the voice should say it, for every sentence
         self.home = root                      # the storyboard's own folder: where an example written for the video is
         self.tex: list[dict] = []      # every LaTeX expression on screen, checked with KaTeX once all scenes are built
+        self.macros = texmath.Macros() # the commands of the LaTeX file the scene being built reads from
 
     def rich(self, value, on: bool, where: str):
         """Text that may hold $...$ math: the string itself, or segments [{"text"} | {"tex", "display", "raw"}]."""
@@ -126,8 +151,9 @@ class _Builder:
         for start, end, tex, display in found:
             if start > pos:
                 segs.append({"text": texmath.unescape(value[pos:start])})
-            seg = {"tex": tex, "display": display, "raw": value[start:end]}
-            self.tex.append({"where": where, "tex": tex, "display": display, "seg": seg, "strict": False})
+            seg = {"tex": texmath.expand(tex, self.macros.optional), "display": display, "raw": value[start:end]}
+            self.tex.append({"where": where, "tex": seg["tex"], "display": display, "seg": seg, "strict": False,
+                             "macros": self.macros})
             segs.append(seg)
             pos = end
         if pos < len(value):
@@ -144,7 +170,8 @@ class _Builder:
         on, where = _math_on(self, spec), heading or kind
         sub = spec.get("sub") if sub_is_source else self.rich(spec.get("sub"), on, where)
         return Scene({"type": kind, "theme": self.theme, "format": self.fmt, "kicker": kicker,
-                      "heading": self.rich(heading, on, where), "sub": sub, "ops": [], **extra})
+                      "heading": self.rich(heading, on, where), "sub": sub, "ops": [],
+                      **({"macros": dict(self.macros)} if self.macros else {}), **extra})
 
 
 class _Clock:
@@ -180,6 +207,7 @@ class _Clock:
         """
         start, text, clip = self.t, beat.get("say"), None
         self.started = round(start, 3)
+        self.scene.starts.append(self.started)
         exact = not beat.get("speak")
         if text:
             if len(text) > MAX_SAY_CHARS:
@@ -371,6 +399,7 @@ def _quote(b: _Builder, spec: dict, kicker: str) -> Scene:
         raise StoryboardError(f'{where}: a quote scene shows a text file as it is written, so a web page would show its '
                               'markup; use an image scene with "url" set to this file, and "find" for the words')
     paragraphs = source.excerpt(b.root, spec["file"], first, last, spec.get("ref"), spec.get("encoding"))
+    b.macros = source.tex_macros(b.root, spec["file"], spec.get("ref"), spec.get("encoding"))
     size = sum(len(p) for p in paragraphs)
     if size > MAX_QUOTE_CHARS:
         raise StoryboardError(f"{where} is {size} characters of text; quote at most {MAX_QUOTE_CHARS} per scene")
@@ -415,8 +444,9 @@ def _quote(b: _Builder, spec: dict, kicker: str) -> Scene:
             mark = next((mid for s, e, mid in spans if s <= a and z <= e), None)
             math = next((m for m in maths if m[0] == a and m[1] == z), None)
             if math:
-                part = {"tex": math[2], "display": math[3], "raw": para[a:z]}
-                b.tex.append({"where": where, "tex": math[2], "display": math[3], "seg": part, "strict": False})
+                part = {"tex": texmath.expand(math[2], b.macros.optional), "display": math[3], "raw": para[a:z]}
+                b.tex.append({"where": where, "tex": part["tex"], "display": math[3], "seg": part, "strict": False,
+                              "macros": b.macros})
             else:
                 part = {"text": texmath.unescape(para[a:z]) if on else para[a:z]}
             if mark is not None:
@@ -712,15 +742,16 @@ def _math(b: _Builder, spec: dict, kicker: str) -> Scene:
     if spec.get("file"):
         first, last = spec["lines"]
         where = f"{spec['file']}:{first}-{last}"
-        blocks, first_line = source.display_math(b.root, spec["file"], first, last, spec.get("ref"), spec.get("encoding"))
+        own = source.tex_macros(b.root, spec["file"], spec.get("ref"), spec.get("encoding"))   # the paper's \newcommands
+        blocks, first_line, numbers = source.display_math(b.root, spec["file"], first, last, spec.get("ref"),
+                                                          spec.get("encoding"), own)
         if spec.get("expect") and spec["expect"] not in first_line:
             raise StoryboardError(f"{where}: line {first} is {first_line.strip()[:60]!r}, not the expected "
                                   f"{spec['expect']!r}; the file has changed, so fix the line range")
         sub, from_source = _where(spec, first, last), True
-        own = source.tex_macros(b.root, spec["file"], spec.get("ref"), spec.get("encoding"))   # the paper's \newcommands
     elif spec.get("tex"):
         blocks = [spec["tex"]] if isinstance(spec["tex"], str) else list(spec["tex"])
-        sub, from_source, own = spec.get("sub"), False, {}
+        sub, from_source, own, numbers = spec.get("sub"), False, texmath.Macros(), []
     else:
         raise StoryboardError(f'{where}: a math scene needs "tex" (formulas written for the video) or "file" and '
                               '"lines" (formulas from the source)')
@@ -757,7 +788,8 @@ def _math(b: _Builder, spec: dict, kicker: str) -> Scene:
                 raise StoryboardError(f'{where}: a mark\'s "nth" is 1 for the first place the piece occurs, 2 for the second')
             block = blocks[line - 1]
             if piece not in block:
-                raise StoryboardError(f"{where}: mark {piece!r} is not in formula {line}; copy it exactly from the LaTeX")
+                raise StoryboardError(f"{where}: mark {piece} is not in formula {line}; copy it exactly from the LaTeX"
+                                      + (" of the file, written with the paper's own commands" if from_source else ""))
             if not texmath.balanced(piece):
                 raise StoryboardError(f"{where}: mark {piece!r} is not a whole piece of LaTeX (its braces do not pair "
                                       "up); mark a complete term")
@@ -793,12 +825,20 @@ def _math(b: _Builder, spec: dict, kicker: str) -> Scene:
             if tex[:s].rstrip().endswith(("^", "_")):       # x^2: the exponent must stay one group
                 wrapped = "{" + wrapped + "}"
             tex = f"{tex[:s]}{wrapped}{tex[e:]}"
+        plain = texmath.expand(blocks[i], own.optional)
+        if from_source and numbers[i] is not False:        # the paper's own equation numbers, or none: never KaTeX's count
+            tex, plain = texmath.renumbered(tex, numbers[i]), texmath.renumbered(plain, numbers[i])
+            if numbers[i] is None:
+                b.warn(where, f"formula {i + 1} is shown without its equation number: the number cannot be told from "
+                              "this file alone (the paper counts by section, sets the counter, or pulls in other "
+                              "files first). Do not say a number for it unless you read it in the paper's PDF")
+        tex = texmath.expand(tex, own.optional)
         shown.append(tex)
         b.tex.append({"where": f"{where} formula {i + 1}", "tex": tex, "display": True, "seg": None, "strict": True,
-                      "plain": blocks[i], "marks": [blocks[i][s:e] for s, e, _ in spans[i]], "macros": own})
+                      "plain": plain, "marks": [blocks[i][s:e] for s, e, _ in spans[i]], "macros": own})
 
-    scene = b.scene("math", kicker, {**spec, "sub": sub}, sub_is_source=from_source, blocks=shown, source=from_source,
-                    macros=own)
+    b.macros = own
+    scene = b.scene("math", kicker, {**spec, "sub": sub}, sub_is_source=from_source, blocks=shown, source=from_source)
     scene.sfx.append((0.0, "whoosh"))
     ops = scene.payload["ops"]
     clock = _Clock(b, scene, where)
@@ -829,7 +869,7 @@ def _math(b: _Builder, spec: dict, kicker: str) -> Scene:
 
 
 def _numeric(cell: str) -> bool:
-    return bool(re.fullmatch(r"[-+−~≈]?[\d][\d,]*(\.\d+)?\s*(%|x|×|ms|s|MB|KB|GB|bpc|bits?)?", cell.strip()))
+    return bool(re.fullmatch(r"\$?\s*[-+−~≈]?[\d][\d,]*(\.\d+)?\s*(%|x|×|ms|s|MB|KB|GB|bpc|bits?)?\s*\$?", cell.strip()))
 
 
 def _table(b: _Builder, spec: dict, kicker: str) -> Scene:
@@ -851,8 +891,11 @@ def _table(b: _Builder, spec: dict, kicker: str) -> Scene:
         else:
             first, last = spec["lines"]
             where = f"{name}:{first}-{last}"
-            header, aligns, rows, first_line = source.md_table(b.root, name, first, last, spec.get("ref"),
-                                                               spec.get("encoding"))
+            in_tex = name.lower().endswith((".tex", ".ltx"))
+            if in_tex:
+                b.macros = source.tex_macros(b.root, name, spec.get("ref"), spec.get("encoding"))
+            header, aligns, rows, first_line = (source.tex_table if in_tex else source.md_table)(
+                b.root, name, first, last, spec.get("ref"), spec.get("encoding"))
             if spec.get("expect") and spec["expect"] not in first_line:
                 raise StoryboardError(f"{where}: line {first} is {first_line.strip()[:60]!r}, not the expected "
                                       f"{spec['expect']!r}; the file has changed, so fix the line range")
@@ -989,6 +1032,7 @@ def _check_math(b: _Builder) -> list[str]:
 
 
 MOVE_STEPS = 96     # positions worked out along the way when a point travels
+DRAW = 1.1          # seconds a curve takes to draw itself (see player.js)
 MAX_STAGES = 8      # formulas one changing curve may move through
 MAX_RECTANGLES = 200
 # Commands KaTeX only draws as red error text here (they need trust), or that would restyle the page.
@@ -1198,14 +1242,24 @@ def _plot(b: _Builder, spec: dict, kicker: str) -> Scene:
                 dy = 0.0                                    # a slope of 1e-17 is zero with rounding noise on it
         return float(dx), float(dy), float(unsure)
 
-    def slope_tex(dx: float, dy: float, unsure: float) -> str:
+    def figures(item: dict) -> int:
+        """How many significant figures a mark's label shows. The narration quotes the same figures."""
+        d = item.get("digits", 4)
+        if isinstance(d, bool) or not isinstance(d, int) or not 1 <= d <= 6:
+            fail('"digits" is how many significant figures the label shows, a whole number from 1 to 6')
+        return d
+
+    def about(value: float, unsure: float, d: int) -> str:
+        return r"\approx" if plot.rounded(value, unsure, d) else "="
+
+    def slope_tex(dx: float, dy: float, unsure: float, d: int = 4) -> str:
         if plot.upright(dx, dy, wide, high):
             return r"\text{vertical}"
         slope = dy / dx
-        return rf"\text{{slope}} {r'\approx' if plot.rounded(slope, unsure) else '='} {plot.number_tex(slope)}"
+        return rf"\text{{slope}} {about(slope, unsure, d)} {plot.number_tex(slope, d)}"
 
-    def point_tex(px: float, py: float, written: str | None) -> str:
-        return rf"\left({written or plot.number_tex(px)},\ {plot.number_tex(py)}\right)"
+    def point_tex(px: float, py: float, written: str | None, d: int = 4) -> str:
+        return rf"\left({written or plot.number_tex(px, d)},\ {plot.number_tex(py, d)}\right)"
 
     def quiet(i: int, param: float, px: float, py: float) -> tuple[float, float]:
         """The point as it is labelled: a coordinate that is only rounding noise (sin(pi) = 1.2e-16) is zero."""
@@ -1221,6 +1275,7 @@ def _plot(b: _Builder, spec: dict, kicker: str) -> Scene:
     moves: dict[int, dict] = {}
     numbers: dict[int, dict[str, float]] = {}      # mark -> the numbers it shows, for {placeholders} in the narration
     named: dict[str, int] = {}
+    shown_to: dict[int, int] = {}                  # mark -> the significant figures its label shows
     made: dict[int, list[int]] = {}                # beat -> the marks made in it and in its cues
     # Which of the three things on a graph each action replaces: one set of points, one line, one filled region.
     slot_of = {"point": "point", "tangent": "tangent", "secant": "tangent", "shade": "shade", "riemann": "shade", "move": "point"}
@@ -1232,6 +1287,7 @@ def _plot(b: _Builder, spec: dict, kicker: str) -> Scene:
         mid = len(marks) - 1
         owner.setdefault(id(act), []).append((slot, mid))
         numbers[mid] = shows or {}
+        shown_to[mid] = figures(item)
         made.setdefault(id(beat), []).append(mid)
         name = item.get("as")
         if name is not None:
@@ -1275,9 +1331,10 @@ def _plot(b: _Builder, spec: dict, kicker: str) -> Scene:
                         fail(f"one of the curves has no value somewhere {between}, so there is no area to shade")
                     xs = [lo + (hi - lo) * k / 160 for k in range(161)]
                     edge = lambda fn: [[plot.tidy(a, wide), plot.tidy(min(max(v, y0), y1), high)] for a, v in zip(xs, fn(xs).tolist())]
-                    sign = r"\approx" if plot.rounded(area, unsure) else "="
+                    d = figures(item)
                     add(act, beat, "shade", {"kind": "shade", "curve": i, "outline": edge(f), "base": edge(g),
-                                             "tex": label(rf"\text{{area}} {sign} {plot.number_tex(area)}", "area")}, item, {"area": area})
+                                             "tex": label(rf"\text{{area}} {about(area, unsure, d)} {plot.number_tex(area, d)}", "area")},
+                        item, {"area": area})
                     continue
                 i = on_curve(item, f"a {kind}")
                 shape = shapes[i]
@@ -1298,10 +1355,11 @@ def _plot(b: _Builder, spec: dict, kicker: str) -> Scene:
                         fail(f"{shape.text!r} has no value somewhere {between}, so there is no area to shade")
                     xs = [lo + (hi - lo) * k / 160 for k in range(161)]
                     ys = [min(max(v, y0), y1) for v in f(xs).tolist()]
-                    sign = r"\approx" if plot.rounded(area, unsure) else "="
+                    d = figures(item)
                     add(act, beat, "shade", {"kind": "shade", "curve": i,
                                              "outline": [[plot.tidy(a, wide), plot.tidy(v, high)] for a, v in zip(xs, ys)],
-                                             "tex": label(rf"\text{{area}} {sign} {plot.number_tex(area)}", "area")}, item, {"area": area})
+                                             "tex": label(rf"\text{{area}} {about(area, unsure, d)} {plot.number_tex(area, d)}", "area")},
+                        item, {"area": area})
                 elif kind == "riemann":
                     f = function(i, '"riemann"')
                     if "from" not in item or "to" not in item:
@@ -1319,11 +1377,11 @@ def _plot(b: _Builder, spec: dict, kicker: str) -> Scene:
                     if any(h != h or math.isinf(h) for h in heights):
                         fail(f"{shape.text!r} has no value at one of the rectangles between x = {plot.number(lo)} and {plot.number(hi)}")
                     total = math.fsum(heights) * width
-                    sign = r"\approx" if plot.rounded(total) else "="
+                    d = figures(item)
                     add(act, beat, "shade", {"kind": "riemann", "curve": i,
                                              "rects": [[plot.tidy(lo + k * width, wide), plot.tidy(lo + (k + 1) * width, wide),
                                                         plot.tidy(min(max(h, y0), y1), high)] for k, h in enumerate(heights)],
-                                             "tex": label(rf"n = {count}:\ \text{{sum}} {sign} {plot.number_tex(total)}", "sum")},
+                                             "tex": label(rf"n = {count}:\ \text{{sum}} {about(total, 0.0, d)} {plot.number_tex(total, d)}", "sum")},
                         item, {"sum": total, "n": float(count)})
                 elif kind == "secant":
                     f = function(i, '"secant"')
@@ -1336,7 +1394,7 @@ def _plot(b: _Builder, spec: dict, kicker: str) -> Scene:
                     if not item.get("approach"):
                         slope = (by - ay) / (bx - ax)
                         add(act, beat, "tangent", {"kind": "tangent", "curve": i, "x": ax, "y": ay, "dx": 1.0, "dy": slope,
-                                                   "other": [bx, by], "tex": label(slope_tex(1.0, slope, 0.0), "slope")},
+                                                   "other": [bx, by], "tex": label(slope_tex(1.0, slope, 0.0, figures(item)), "slope")},
                             item, {"slope": slope, "x": ax, "y": ay})
                         continue
                     # The second point slides to the first. Each line on the way is a true secant; the last is the tangent.
@@ -1382,14 +1440,14 @@ def _plot(b: _Builder, spec: dict, kicker: str) -> Scene:
                     if kind == "point":
                         qx, qy = quiet(i, param, px, py)
                         add(act, beat, "point", {"kind": "point", "curve": i, "x": px, "y": py,
-                                                 "tex": label(point_tex(qx, qy, written), "point")}, item, {"x": qx, "y": qy})
+                                                 "tex": label(point_tex(qx, qy, written, figures(item)), "point")}, item, {"x": qx, "y": qy})
                     else:
                         dx, dy, unsure = heading_of(i, px, py, param)
                         shows = {"x": px, "y": py}
                         if not plot.upright(dx, dy, wide, high):
                             shows["slope"] = dy / dx
                         add(act, beat, "tangent", {"kind": "tangent", "curve": i, "x": px, "y": py, "dx": dx, "dy": dy,
-                                                   "tex": label(slope_tex(dx, dy, unsure), "slope")}, item, shows)
+                                                   "tex": label(slope_tex(dx, dy, unsure, figures(item)), "slope")}, item, shows)
 
     # A number the engine worked out is quoted in the narration by name, never retyped: "{p.y}" is the y of the
     # mark named p, "{slope}" the slope of the only tangent in that sentence. So voice and screen cannot disagree.
@@ -1408,14 +1466,18 @@ def _plot(b: _Builder, spec: dict, kicker: str) -> Scene:
                 if len(distinct) > 1:
                     fail(f'the narration quotes {{{first}}}, but several marks in that sentence have one; name them with "as" '
                          f"and write {{name.{first}}}")
-                value = numbers[having[0]][first]
+                value, mid = numbers[having[0]][first], having[0]
             else:
                 if first not in named:
                     fail(f'the narration quotes {{{first}.{field}}}, but no mark is named "{first}" (give it "as": "{first}")')
                 if field not in numbers[named[first]]:
                     fail(f'the mark "{first}" has no {field}; it has {", ".join(sorted(numbers[named[first]])) or "no numbers"}')
-                value = numbers[named[first]][field]
-            return plot.minus(plot.number(value, int(digits) if digits else 4))
+                value, mid = numbers[named[first]][field], named[first]
+            if digits and int(digits) != shown_to[mid]:      # a caption that says 5.7 under a label that says 5.711
+                fail(f'the narration quotes {m.group(0)} to {digits} figures, but the label on screen shows '
+                     f'{shown_to[mid]}; to round both, put "digits": {digits} on the mark and write '
+                     f'{m.group(0).split(":")[0]}}}')
+            return plot.minus(plot.number(value, shown_to[mid]))
 
         return re.sub(r"\{([A-Za-z]\w*)(?:\.([a-z]+))?(?::([1-9]))?\}", fill, text)
 
@@ -1550,6 +1612,9 @@ def _plot(b: _Builder, spec: dict, kicker: str) -> Scene:
                 if marks[mid]["curve"] >= stage.visible:
                     b.warn(where, f"a {marks[mid]['kind']} is on curve {marks[mid]['curve'] + 1} before that curve is revealed")
                 at = round(t + 0.12 + (j * 0.3 if marks[mid]["kind"] != "move" else 0), 3)
+                drawn = max((op["t"] + DRAW for op in ops if op["op"] == "reveal" and op.get("curve") == marks[mid]["curve"]),
+                            default=0.0)
+                at = round(max(at, drawn), 3)              # a mark waits for its curve: an area with no curve over it is a blob
                 ops.append({"op": "show", "t": at, "mark": mid})
                 scene.sfx.append((at, "mark" if kind == "shade" else "tick"))
                 if marks[mid]["kind"] == "move":
@@ -1653,6 +1718,7 @@ def build(storyboard: dict, root: Path, theme: str, narrator, captions: bool = T
                 problems.append(f'chapter {n}, {spec.get("heading") or spec["type"]}: this scene shows the source, so it '
                                 'cannot be "beyond" it; put "beyond" on the scenes that are your own explanation')
                 continue
+            b.macros = texmath.Macros()
             try:
                 scenes.append(make(b, spec, kicker))
                 scenes[-1].payload["beyond"] = beyond and not unsourced

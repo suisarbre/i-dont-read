@@ -302,12 +302,12 @@ def shown(value: float, digits: int = 4) -> float:
     return float(lead) * (10.0 ** power if power is not None else 1.0)
 
 
-def rounded(value: float, error: float = 0.0) -> bool:
+def rounded(value: float, error: float = 0.0, digits: int = 4) -> bool:
     """True when the number on screen is not the value itself, so a label should say "about": the digits had
     to be cut, or the value is only known to within `error`."""
     if value == 0:
         return False                                        # set to zero on purpose: nothing was cut off
-    gap = abs(shown(value) - value)
+    gap = abs(shown(value, digits) - value)
     return gap > max(4 * error, 1e-7 * abs(value)) or error > 1e-6 * max(abs(value), 1e-300)
 
 

@@ -454,8 +454,12 @@
         const clamp = x => Math.min(Math.max(G.padX, x), G.W - G.padX - w);
         const centre = clamp(rect.x + rect.w / 2 - w / 2), right = clamp(rect.x + rect.w - w - 12);
         const under = rect.y + rect.h + 14, over = rect.y - h - 14;
-        const spots = prefer === 'below'
-          ? [[centre, under], [centre, over], [right, under], [right, over]]
+        // 'edge': on the outline of the rectangle itself, at its right end, the way a tab sits on a folder.
+        // In a table a pill above a row lies on the row before it, and reads as that row's.
+        const along = [];                                    // from the right end leftwards, wherever no text is in the way
+        for (let x = rect.x + rect.w - w - 12; x >= rect.x + 12; x -= 24) along.push(clamp(x));
+        const spots = prefer === 'edge' ? [...along.map(x => [x, rect.y - h / 2]), ...along.map(x => [x, rect.y + rect.h - h / 2])]
+          : prefer === 'below' ? [[centre, under], [centre, over], [right, under], [right, over]]
           : [[centre, over], [right, over], [centre, under], [right, under]];
         if (outside !== null) spots.push([centre, outside + 14]);     // below the whole block: always clear of its text
         const fits = ([x, y]) => y >= 0 && y + h <= G.bottom;
@@ -627,7 +631,7 @@
         });
         shown = true; current = g;
       } else if (op.op === 'note') {
-        if (op.text && current) note.show(op.t, op.text, { ...current, x: current.x + wrapAt.x, y: current.y + wrapAt.y }, 'above', words, wrapAt.y + wrapAt.h);
+        if (op.text && current) note.show(op.t, op.text, { ...current, x: current.x + wrapAt.x, y: current.y + wrapAt.y }, 'edge', words, wrapAt.y + wrapAt.h);
         else note.hide(op.t);
       }
     }

@@ -43,6 +43,23 @@ def _fetch(name: str) -> Path:
     return dest
 
 
+def _key(text: str, voice: str, speed: float, lang: str) -> str:
+    return hashlib.sha256(f"timed|{MODEL}|{voice}|{speed}|{lang}|{text}".encode()).hexdigest()[:20]
+
+
+def remembered(text: str, voice: str = "af_heart", speed: float = 1.0, lang: str = "en-us"):
+    """How long a sentence took, and when each word fell, if it has been spoken before on this machine.
+    Lets a check give real lengths for every sentence that has not changed since the last render."""
+    key = _key(text, voice, speed, lang)
+    wav, meta = cache_dir() / "clips" / f"{key}.wav", cache_dir() / "clips" / f"{key}.json"
+    if not (wav.exists() and meta.exists()):
+        return None
+    try:
+        return sf.info(str(wav)).duration, [tuple(w) for w in json.loads(meta.read_text())]
+    except (RuntimeError, ValueError, OSError):
+        return None
+
+
 class Narrator:
     def __init__(self, voice: str = "af_heart", speed: float = 1.0, lang: str = "en-us"):
         self.voice, self.speed, self.lang = voice, speed, lang
@@ -58,7 +75,7 @@ class Narrator:
 
     def say(self, text: str) -> Clip:
         """Speak one sentence: mono float32 samples at 24 kHz, with word timings when available."""
-        key = hashlib.sha256(f"timed|{MODEL}|{self.voice}|{self.speed}|{self.lang}|{text}".encode()).hexdigest()[:20]
+        key = _key(text, self.voice, self.speed, self.lang)
         wav, meta = self.clips / f"{key}.wav", self.clips / f"{key}.json"
         if wav.exists() and meta.exists():
             samples, _ = sf.read(wav, dtype="float32")

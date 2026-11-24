@@ -275,18 +275,23 @@ def _range(root: Path, file: str, first: int, last: int, ref, encoding, scene: s
 
 
 def display_math(root: Path, file: str, first: int, last: int, ref: str | None = None,
-                 encoding: str | None = None) -> tuple[list[str], str]:
-    """Display-math blocks that lie wholly inside lines first..last, as written, plus the first line (for `expect`).
+                 encoding: str | None = None, defined: dict | None = None) -> tuple[list[str], str, list]:
+    """Display-math blocks that lie wholly inside lines first..last, as written, plus the first line (for `expect`)
+    and, for each block, the equation numbers the paper prints beside it (see texmath.equation_numbers).
 
     Blocks are $$...$$ and \\[...\\] (LaTeX or Markdown) and equation-like environments (LaTeX). The only
     change made is dropping \\label{...}, a cross-reference name that is never printed.
     """
+    from . import texmath
     lines = _range(root, file, first, last, ref, encoding, "math")
     text = "\n".join(lines)
-    blocks = []
+    whole = _read(root, file, ref, "math", encoding)
+    offset = sum(len(line) + 1 for line in whole.split("\n")[:first - 1])
+    blocks, numbers = [], []
     for m in _BLOCK.finditer(text):
         tex = m.group(3) or (m.group(1) if m.group(1) is not None else m.group(2))
         blocks.append(_LABEL.sub("", tex).strip())
+        numbers.append(texmath.equation_numbers(whole, offset + m.start(), defined) if m.group(3) else False)
     rest = _BLOCK.sub("", text)
     if re.search(r"\$\$|\\\[|\\begin\{(" + _ENVS + r")", rest):
         raise ValueError(f"{file} lines {first}-{last}: a math block starts in this range but ends after it; "
@@ -295,27 +300,135 @@ def display_math(root: Path, file: str, first: int, last: int, ref: str | None =
         raise ValueError(f'{file} lines {first}-{last} hold no display math ($$...$$, \\[...\\] or an equation '
                          'environment). If the source writes the formula as plain text, use a math scene with '
                          '"tex" instead: that is an explanation, and is shown as one')
-    return blocks, lines[0]
+    return blocks, lines[0], numbers
 
 
-def tex_macros(root: Path, file: str, ref: str | None = None, encoding: str | None = None) -> dict[str, str]:
+def tex_macros(root: Path, file: str, ref: str | None = None, encoding: str | None = None):
     """The commands a LaTeX file defines for itself, and those in the files it pulls in from beside it."""
     from . import texmath
+    found = texmath.Macros()
     if not file.lower().endswith((".tex", ".ltx", ".sty")):
-        return {}
+        return found
     text = _read(root, file, ref, "math", encoding)
-    found: dict[str, str] = {}
     for name in texmath.included(text):                    # a paper often keeps them in macros.tex or its own .sty
         for candidate in (name, name + ".tex", name + ".sty"):
             beside = (Path(file).parent / candidate).as_posix()
             if (root / beside).is_file() and (root / beside).resolve().is_relative_to(root.resolve()):
                 try:
-                    found.update(texmath.macros(_read(root, beside, None, "math", encoding)))
+                    found.merge(texmath.macros(_read(root, beside, None, "math", encoding)))
                 except (ValueError, OSError):
                     pass
                 break
-    found.update(texmath.macros(text))
+    found.merge(texmath.macros(text))
+    for name in list(found):                               # a plain command may be written with an optional-argument one
+        found[name] = texmath.expand(found[name], found.optional)
     return found
+
+
+# --- LaTeX tables ------------------------------------------------------------
+
+_TABULAR = re.compile(r"\\begin\{(tabular\*?|tabularx|longtable|array)\}(.*?)\\end\{\1\}", re.S)
+_RULES = re.compile(r"\\(?:hline|toprule|midrule|bottomrule|endhead|endfirsthead|endfoot|endlastfoot|addlinespace)(?![A-Za-z])"
+                    r"(?:\[[^\]]*\])?|\\(?:cline|cmidrule)(?:\([^)]*\))?\{[^{}]*\}")
+_PLAIN_COMMANDS = re.compile(r"\\(?:textbf|textit|emph|textrm|textsf|texttt|textsc|mathrm|text|mbox|underline)\s*\{([^{}]*)\}")
+
+
+def _outside_math(text: str, change) -> str:
+    """Apply `change` to the parts of a cell that are not $...$ math."""
+    from . import texmath
+    out, pos = [], 0
+    for start, end, _, _ in texmath.spans(text):
+        out.append(change(text[pos:start]))
+        out.append(text[start:end])
+        pos = end
+    out.append(change(text[pos:]))
+    return "".join(out)
+
+
+def _tex_cell(cell: str, where: str) -> str:
+    def plain(text: str) -> str:
+        for _ in range(4):
+            text = _PLAIN_COMMANDS.sub(r"\1", text)
+        text = re.sub(r"\\([%&_#{}])", r"\1", text).replace("~", " ").replace("---", "—").replace("--", "–")
+        text = re.sub(r"\\[,;! ]", " ", text)
+        left = re.search(r"\\[A-Za-z]+", text)
+        if left:
+            raise ValueError(f"{where}: a cell uses {left.group(0)}, which a table scene cannot show as the paper "
+                             'prints it; write the table out with "header" and "rows", and name the paper in "source"')
+        return text.replace("{", "").replace("}", "")
+    cell = " ".join(_outside_math(cell.strip(), plain).split())
+    number = re.fullmatch(r"\$\s*([-+]?)\s*(\d[\d,]*(?:\.\d+)?)\s*\$", cell)
+    if number:                                             # $-0.8$ is how LaTeX writes a minus sign: the same number, as text
+        return ("−" if number.group(1) == "-" else number.group(1)) + number.group(2)
+    return cell
+
+
+def _split_top(text: str, sep: str) -> list[str]:
+    """Split on `sep` where it is not inside braces or $...$."""
+    parts, cur, depth, math, i = [], "", 0, False, 0
+    while i < len(text):
+        c = text[i]
+        if c == "\\" and not text.startswith(sep, i):
+            cur += text[i:i + 2]
+            i += 2
+            continue
+        if c == "$":
+            math = not math
+        depth += c == "{"
+        depth -= c == "}"
+        if text.startswith(sep, i) and depth == 0 and not math:
+            parts.append(cur)
+            cur = ""
+            i += len(sep)
+            continue
+        cur += c
+        i += 1
+    parts.append(cur)
+    return parts
+
+
+def tex_table(root: Path, file: str, first: int, last: int, ref: str | None = None,
+              encoding: str | None = None) -> tuple[list[str], list[str | None], list[list[str]], str]:
+    """The LaTeX table (a tabular) inside lines first..last: header, column alignments, data rows, and the first line."""
+    from . import texmath
+    lines = _range(root, file, first, last, ref, encoding, "table")
+    where = f"{file} lines {first}-{last}"
+    text = "\n".join(texmath._COMMENT.sub("", line) for line in lines)
+    found = _TABULAR.findall(text)
+    if len(found) != 1:
+        raise ValueError(f"{where} hold {len(found) or 'no'} LaTeX table{'s' if len(found) > 1 else ''} "
+                         "(\\begin{tabular} ... \\end{tabular}); the range must take in exactly one, from its "
+                         "\\begin line to its \\end line")
+    env, body = found[0]
+    if env.startswith("tabular*") or env == "tabularx":   # {width}{columns}
+        body = body[texmath._group(body, 0)[1]:] if texmath._group(body, 0) else body
+    option = re.match(r"\s*\[[^\]]*\]", body)
+    if option:
+        body = body[option.end():]
+    cols = texmath._group(body, 0)
+    if not cols:
+        raise ValueError(f"{where}: the table has no column list after \\begin{{{env}}}")
+    spec = re.sub(r"[@!<>]\{[^{}]*\}|\|", "", cols[0])
+    spec = re.sub(r"[pmbX]\{[^{}]*\}", "l", spec).replace("X", "l")
+    aligns = [{"l": None, "c": "center", "r": "right"}.get(c) for c in spec if c in "lcr"]
+    body = body[cols[1]:]
+    if re.search(r"\\(?:multicolumn|multirow)(?![A-Za-z])", body):
+        raise ValueError(f"{where}: the table has cells that span columns or rows (\\multicolumn, \\multirow), which "
+                         'a table scene does not draw; write it out with "header" and "rows", and name the paper in "source"')
+    body = _RULES.sub("", body)
+    rows = []
+    for raw in _split_top(body, "\\\\"):
+        raw = re.sub(r"^\s*\[[^\]]*\]", "", raw)              # \\[2pt]: extra space after the row above
+        if not raw.strip():
+            continue
+        rows.append([_tex_cell(cell, where) for cell in _split_top(raw, "&")])
+    if len(rows) < 2:
+        raise ValueError(f"{where}: the table has no rows under its first one")
+    width = len(rows[0])
+    for n, row in enumerate(rows[1:], 1):
+        if len(row) != width:
+            raise ValueError(f"{where}: row {n} has {len(row)} cells but the first row has {width}")
+    return rows[0], (aligns + [None] * width)[:width], rows[1:], lines[0]
 
 
 # --- tables ------------------------------------------------------------------
@@ -356,7 +469,9 @@ def md_table(root: Path, file: str, first: int, last: int, ref: str | None = Non
     rows = [line for line in lines if line.strip()]
     if len(rows) < 2 or not _SEPARATOR.match(rows[1]) or "|" not in rows[0]:
         raise ValueError(f"{file} lines {first}-{last} do not start with a Markdown table (a header row, then a "
-                         "row of dashes like |---|---|); start the range on the header row")
+                         "row of dashes like |---|---|); start the range on the header row. If the table is not "
+                         'written that way in the source, write it out with "header" and "rows", and name the '
+                         'source in "source"')
     for line in rows[2:]:
         if "|" not in line:
             raise ValueError(f"{file} lines {first}-{last}: {line.strip()[:40]!r} is not a table row; "
