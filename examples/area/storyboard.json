@@ -1,0 +1,80 @@
+{
+  "title": "Area, and how fast it grows",
+  "source": "none",
+  "intro": { "say": "Three things a graph can now do: grow an area, draw the area as a curve of its own, and show a jump." },
+  "chapters": [
+    {
+      "title": "An area that builds up",
+      "say": "Watch an area add up.",
+      "scenes": [
+        {
+          "type": "plot",
+          "heading": "A running total",
+          "curves": [ { "expr": "1 + sin(x)", "name": "f" } ],
+          "x": [0, 6.5],
+          "y": [0, 2.6],
+          "beats": [
+            { "say": "Start at zero and sweep the right edge across. The area under the curve adds up as it goes.",
+              "reveal": 1,
+              "cues": [ { "at": "sweep", "shade": { "from": 0, "to": 6, "grow": true, "as": "total" } } ] },
+            { "say": "By the time the edge reaches 6, the total is {total.area}." }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "The area is a curve too",
+      "say": "Record that total at every x.",
+      "scenes": [
+        {
+          "type": "plot",
+          "heading": "The area function",
+          "curves": [ { "expr": "1 + sin(x)", "name": "f" }, { "integral": 1, "from": 0, "name": "A" } ],
+          "x": [0, 6.5],
+          "y": [0, 7.4],
+          "beats": [
+            { "say": "Here is the same curve.", "reveal": 1 },
+            { "say": "Record the running total at every x and you get a second curve, the area function, A of x.",
+              "at": "a second curve", "reveal": 2 },
+            { "say": "Shade up to 2 and the area is {s.area}. The new curve is exactly that high there: {p.y}.",
+              "shade": { "from": 0, "to": 2, "as": "s" },
+              "cues": [ { "at": "The new curve", "shade": { "from": 0, "to": 2 },
+                          "point": { "x": 2, "on": 2, "label": "y", "side": "left", "as": "p" } } ] },
+            { "say": "Now measure how fast the area is growing at 2. Its slope is {m.slope}.",
+              "shade": null,
+              "cues": [ { "at": "Its slope", "tangent": { "x": 2, "on": 2, "as": "m" } } ] },
+            { "say": "And the height of the original curve at 2 is {h.y}. The same number.",
+              "tangent": { "x": 2, "on": 2 },
+              "point": { "x": 2, "label": "y", "side": "below", "as": "h" } },
+            { "say": "Slide along, and the slope of the area keeps matching the height of the curve.",
+              "tangent": null,
+              "move": [ { "on": 2, "from": 0.6, "to": 6, "tangent": true }, { "on": 1, "from": 0.6, "to": 6 } ] }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Jumps",
+      "say": "And one more mark: an arrow from point to point.",
+      "scenes": [
+        {
+          "type": "plot",
+          "heading": "A step that is too big",
+          "expr": "x^2",
+          "name": "f",
+          "x": [-3.2, 3.2],
+          "y": [0, 9.5],
+          "beats": [
+            { "say": "Walk downhill on this bowl in small steps, and each jump lands closer to the bottom.",
+              "cues": [ { "at": "small steps", "arrow": [ { "from": 2.5, "to": 1.5 }, { "from": 1.5, "to": 0.9 }, { "from": 0.9, "to": 0.54 } ] } ] },
+            { "say": "Take steps that are too big, and each jump clears the bottom and lands higher on the other side.",
+              "arrow": null,
+              "cues": [ { "at": "each jump", "arrow": [ { "from": 1, "to": -1.4 }, { "from": -1.4, "to": 1.96 }, { "from": 1.96, "to": -2.744 } ],
+                          "point": [ { "x": -1.4, "label": "x", "side": "left" }, { "x": 1.96, "label": "x", "side": "right" },
+                                     { "x": -2.744, "label": "x", "side": "above", "digits": 3 } ] } ] }
+          ]
+        }
+      ]
+    }
+  ]
+}

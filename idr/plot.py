@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import ast
 import math
+import re
 
 import numpy as np
 
@@ -707,6 +708,134 @@ class Function:
     def direction(self, x: float, wide: float, high: float) -> tuple[float, float, float]:
         """(dx, dy, uncertainty of the slope) of the tangent at x; ValueError where there is none."""
         return heading(lambda v: (v, self.f(v)), x, wide, wide, high)
+
+
+class Integral:
+    """F(x) = the signed area under g from a to x, as a function that can be drawn, marked and measured like
+    any other. Worked out by Gauss-Legendre quadrature over 2048 cells of [lo, hi], so it is smooth enough
+    for its own slope to be taken (and that slope is g: the fundamental theorem, shown instead of asserted)."""
+
+    _NODES = np.array([-0.9061798459386640, -0.5384693101056831, 0.0, 0.5384693101056831, 0.9061798459386640])
+    _WEIGHTS = np.array([0.2369268850561891, 0.4786286704993665, 0.5688888888888889, 0.4786286704993665, 0.2369268850561891])
+    CELLS = 2048
+
+    def __init__(self, g, a: float, lo: float, hi: float, text: str = "the area"):
+        self.g, self.a, self.lo, self.hi, self.text = g, float(a), float(lo), float(hi), text
+        if not lo <= a <= hi:
+            raise ValueError("starts outside the range it is worked out over")
+        self.edges = np.linspace(lo, hi, self.CELLS + 1)
+        left, right = self.edges[:-1], self.edges[1:]
+        cells = self._over(left, right)
+        if not np.isfinite(cells).all():
+            raise ValueError("has no value somewhere in the range, so there is no area to add up")
+        # Where the curve has a jump or a corner, one pass over a cell is not exact: it and its two halves
+        # disagree. Those few cells are split again and again around the trouble until the halves agree.
+        halves = self._over(left, (left + right) / 2) + self._over((left + right) / 2, right)
+        with np.errstate(all="ignore"):
+            tallest = float(np.nanmax(np.abs(np.asarray(g(self.edges), dtype=float)))) or 1.0
+        self.close = 1e-11 * tallest * (hi - lo) / self.CELLS
+        self.rough = set(np.flatnonzero(np.abs(cells - halves) > self.close).tolist())
+        self.breaks: dict[int, tuple[float, float]] = {}   # cell -> (where the curve jumps in it, the area up to there)
+        for k in self.rough:
+            start, end = float(left[k]), float(right[k])
+            at = self._jump(start, end)
+            if at is not None:
+                self.breaks[k] = (at, self._fine(start, at))
+                cells[k] = self.breaks[k][1] + self._fine(at, end)
+            else:
+                cells[k] = self._fine(start, end)
+        self.sums = np.concatenate([[0.0], np.cumsum(cells)])
+        self.shift = 0.0
+        self.shift = float(self(a))
+
+    def _over(self, a, b):
+        mid, half = (a + b) / 2, (b - a) / 2
+        with np.errstate(all="ignore"):
+            return half * sum(w * np.asarray(self.g(mid + half * x), dtype=float) for x, w in zip(self._NODES, self._WEIGHTS))
+
+    def _fine(self, a: float, b: float, depth: int = 44) -> float:
+        whole, mid = float(self._over(a, b)), (a + b) / 2
+        left, right = float(self._over(a, mid)), float(self._over(mid, b))
+        if depth == 0 or abs(whole - left - right) <= self.close:
+            return left + right
+        return self._fine(a, mid, depth - 1) + self._fine(mid, b, depth - 1)
+
+    def _jump(self, a: float, b: float) -> float | None:
+        """Where between a and b the curve jumps, if it does: one step that holds most of the change across
+        the cell, closed in on by halving. The area is then added up to the jump and from it, never across."""
+        xs = np.linspace(a, b, 33)
+        with np.errstate(all="ignore"):
+            ys = np.asarray(self.g(xs), dtype=float)
+        steps = np.abs(np.diff(ys))
+        n = int(steps.argmax())
+        if not np.isfinite(ys).all() or steps[n] <= 0.5 * (ys.max() - ys.min()) or steps[n] <= 1e-9 * max(abs(ys).max(), 1e-300):
+            return None
+        lo, hi, y_lo, y_hi = float(xs[n]), float(xs[n + 1]), float(ys[n]), float(ys[n + 1])
+        for _ in range(60):
+            mid = (lo + hi) / 2
+            if mid in (lo, hi):
+                break
+            y = float(self.g(mid))
+            if abs(y - y_lo) > abs(y_hi - y):
+                hi, y_hi = mid, y
+            else:
+                lo, y_lo = mid, y
+        return hi if abs(y_hi - y_lo) > 0.25 * steps[n] else None      # a steep stretch, not a jump: nothing to split at
+
+    def __call__(self, x):
+        xs = np.asarray(x, dtype=float)
+        inside = (xs >= self.lo) & (xs <= self.hi)
+        safe = np.where(inside, xs, self.lo)
+        k = np.clip(np.floor((safe - self.lo) / (self.hi - self.lo) * self.CELLS).astype(int), 0, self.CELLS - 1)
+        part = np.asarray(self._over(self.edges[k], safe), dtype=float)
+        if self.rough:
+            flat_k, flat_x, flat_part = np.atleast_1d(k).ravel(), np.atleast_1d(safe).ravel(), np.atleast_1d(part).ravel().copy()
+            for n in np.flatnonzero(np.isin(flat_k, list(self.rough))):
+                edge, to, split = float(self.edges[flat_k[n]]), float(flat_x[n]), self.breaks.get(int(flat_k[n]))
+                flat_part[n] = split[1] + self._fine(split[0], to) if split and to > split[0] else self._fine(edge, to)
+            part = flat_part.reshape(np.shape(part))
+        out = np.where(inside, self.sums[k] + part - self.shift, np.nan)
+        return out if out.ndim else float(out)
+
+    def area(self, a: float, b: float) -> tuple[float, float]:
+        return area(self, a, b)
+
+
+class Area(Function):
+    """The area function of another curve: A(x) = the integral of that curve from a to x."""
+
+    def __init__(self, of: Function, a: float, x0: float, x1: float, name: str | None = None, a_tex: str | None = None):
+        lo, hi = min(a, x0), max(a, x1)
+        try:
+            value, _ = area(of.f, lo, hi)
+        except ValueError as problem:
+            raise ValueError(f"the area under {of.text!r} cannot be added up: the curve {problem} between "
+                             f"x = {number(lo)} and {number(hi)}") from None
+        if value != value:
+            raise ValueError(f"the area under {of.text!r} cannot be added up: the curve has no value somewhere between "
+                             f"x = {number(lo)} and {number(hi)}")
+        if runs_away(of.f, lo, hi):
+            raise ValueError(f"the area under {of.text!r} cannot be added up: the curve shoots off without bound between "
+                             f"x = {number(lo)} and {number(hi)}")
+        pad = 0.05 * (hi - lo)
+        try:                                               # a little past the ends, where the curve allows, so a slope can be taken at them
+            self.f = Integral(of.f, a, lo - pad, hi + pad, f"the area under {of.text}")
+        except ValueError:
+            try:
+                self.f = Integral(of.f, a, lo, hi, f"the area under {of.text}")
+            except ValueError as problem:
+                raise ValueError(f"the area under {of.text!r} cannot be added up: the curve {problem}") from None
+        self.name, self.text, self.of, self.a_tex = name, self.f.text, of, a_tex or number_tex(a)
+
+    def tex(self) -> str:
+        if self.of.name:
+            inner = f"{self.of.name}(t)"
+        elif isinstance(self.of.f, Formula):
+            inside = Formula(re.sub(r"(?<![A-Za-z0-9_])x(?![A-Za-z0-9_])", "t", self.of.f.text), ("t",))
+            inner = inside.tex() if isinstance(inside.node, (ast.Name, ast.Constant, ast.Call)) else rf"\left({inside.tex()}\right)"
+        else:
+            inner = r"\ldots"
+        return rf"{f'{self.name}(x)' if self.name else 'y'} = \int_{{{self.a_tex}}}^{{x}} {inner}\,dt"
 
 
 class Parametric:

@@ -1097,6 +1097,18 @@ def _plot(b: _Builder, spec: dict, kicker: str) -> Scene:
                 if lo == hi:
                     fail('"vary" needs two different values')
                 shapes.append(plot.Changing(expr=c.get("expr"), letter=letter, lo=lo, hi=hi, name=c.get("name")))
+            elif "integral" in c:
+                of = c["integral"]
+                if isinstance(of, bool) or not isinstance(of, int) or not 1 <= of <= len(shapes) or shapes[of - 1].kind != "function":
+                    fail('"integral" is the number of an earlier curve in this scene that is a function of x; the new '
+                         'curve is the area under it, as in {"integral": 1, "from": 0, "name": "A"}')
+                if "from" not in c:
+                    fail('"integral" needs "from", the x where the area starts at zero')
+                start, start_tex = num(c["from"], '"from"')
+                name = c.get("name")
+                if name is not None and not re.fullmatch(r"[A-Za-z]", str(name)):
+                    fail(f'a curve\'s "name" is one letter, as in A for A(x); not {name!r}')
+                shapes.append(plot.Area(shapes[of - 1], start, x0, x1, name, start_tex))
             elif "t" in c:
                 if not ("x" in c and "y" in c):
                     fail('a curve with "t" needs "x" and "y", two formulas in t')
@@ -1249,6 +1261,20 @@ def _plot(b: _Builder, spec: dict, kicker: str) -> Scene:
             fail('"digits" is how many significant figures the label shows, a whole number from 1 to 6')
         return d
 
+    def shown_as(item: dict, kind: str) -> str:
+        """Which label a mark carries: a point's "xy" (the default), "x" or "y"; anything's "none"."""
+        choice = item.get("label", "xy" if kind == "point" else "on")
+        allowed = ("xy", "x", "y", "none") if kind == "point" else ("on", "none")
+        if choice not in allowed:
+            fail(f'"label" on a {kind} is ' + (' or '.join(f'"{a}"' for a in allowed if a != "on")) + f"; not {choice!r}")
+        return choice
+
+    def side_of(item: dict) -> str | None:
+        side = item.get("side")
+        if side is not None and side not in ("left", "right", "above", "below"):
+            fail(f'"side" is where the label sits by its point: "left", "right", "above" or "below"; not {side!r}')
+        return side
+
     def about(value: float, unsure: float, d: int) -> str:
         return r"\approx" if plot.rounded(value, unsure, d) else "="
 
@@ -1278,11 +1304,19 @@ def _plot(b: _Builder, spec: dict, kicker: str) -> Scene:
     shown_to: dict[int, int] = {}                  # mark -> the significant figures its label shows
     made: dict[int, list[int]] = {}                # beat -> the marks made in it and in its cues
     # Which of the three things on a graph each action replaces: one set of points, one line, one filled region.
-    slot_of = {"point": "point", "tangent": "tangent", "secant": "tangent", "shade": "shade", "riemann": "shade", "move": "point"}
+    slot_of = {"point": "point", "tangent": "tangent", "secant": "tangent", "shade": "shade", "riemann": "shade",
+               "move": "point", "arrow": "arrow"}
     example = {"point": '{"x": 1}', "tangent": '{"x": 1}', "secant": '{"x": 1, "other": 3}',
-               "shade": '{"from": 0, "to": 2}', "riemann": '{"from": 0, "to": 2, "n": 8}', "move": '{"from": -2, "to": 2}'}
+               "shade": '{"from": 0, "to": 2}', "riemann": '{"from": 0, "to": 2, "n": 8}', "move": '{"from": -2, "to": 2}',
+               "arrow": '{"from": 1, "to": -1.4}'}
 
     def add(act: dict, beat: dict, slot: str, mark: dict, item: dict, shows: dict | None = None) -> int:
+        if "label" in item and mark["kind"] not in ("move", "arrow"):
+            if shown_as(item, mark["kind"]) == "none":     # nothing on screen, so nothing for the narration to quote
+                mark.pop("tex", None)
+                shows = {}
+        if item.get("side") is not None:
+            mark["side"] = side_of(item)
         marks.append(mark)
         mid = len(marks) - 1
         owner.setdefault(id(act), []).append((slot, mid))
@@ -1297,6 +1331,25 @@ def _plot(b: _Builder, spec: dict, kicker: str) -> Scene:
                 fail(f'two different marks are named "{name}"')
             named[name] = mid
         return mid
+
+    def growing(mid: int, item: dict, height, lo: float, hi: float, area: float, unsure: float, d: int) -> None:
+        """An area that fills in from its left edge: the running total at each step on the way, worked out the
+        same way as the whole. The last step is the whole area, written as its label writes it."""
+        if not item.get("grow"):
+            return
+        if "tex" not in marks[mid]:
+            fail('a growing area shows its running total, so it cannot have "label": "none"')
+        try:
+            running = plot.Integral(height, lo, lo, hi)
+        except ValueError as problem:
+            fail(f"the area cannot grow: the curve {problem}")
+        steps = []
+        for k in range(MOVE_STEPS + 1):
+            x = lo + (hi - lo) * k / MOVE_STEPS
+            steps.append([plot.tidy(x, wide), f"area ≈ {plot.fixed(running(x))}"])
+        steps[-1][1] = f"area {'≈' if plot.rounded(area, unsure, d) else '='} {plot.minus(plot.number(area, d))}"
+        marks[mid]["grow"] = steps
+        moves[mid] = item
 
     # Everything drawn on a curve is worked out from its formula here, never typed into the storyboard.
     for beat in spec.get("beats", []):
@@ -1332,9 +1385,10 @@ def _plot(b: _Builder, spec: dict, kicker: str) -> Scene:
                     xs = [lo + (hi - lo) * k / 160 for k in range(161)]
                     edge = lambda fn: [[plot.tidy(a, wide), plot.tidy(min(max(v, y0), y1), high)] for a, v in zip(xs, fn(xs).tolist())]
                     d = figures(item)
-                    add(act, beat, "shade", {"kind": "shade", "curve": i, "outline": edge(f), "base": edge(g),
-                                             "tex": label(rf"\text{{area}} {about(area, unsure, d)} {plot.number_tex(area, d)}", "area")},
-                        item, {"area": area})
+                    mid = add(act, beat, "shade", {"kind": "shade", "curve": i, "outline": edge(f), "base": edge(g),
+                                                   "tex": label(rf"\text{{area}} {about(area, unsure, d)} {plot.number_tex(area, d)}", "area")},
+                              item, {"area": area})
+                    growing(mid, item, lambda xs: np.abs(np.asarray(f(xs)) - np.asarray(g(xs))), lo, hi, area, unsure, d)
                     continue
                 i = on_curve(item, f"a {kind}")
                 shape = shapes[i]
@@ -1356,10 +1410,11 @@ def _plot(b: _Builder, spec: dict, kicker: str) -> Scene:
                     xs = [lo + (hi - lo) * k / 160 for k in range(161)]
                     ys = [min(max(v, y0), y1) for v in f(xs).tolist()]
                     d = figures(item)
-                    add(act, beat, "shade", {"kind": "shade", "curve": i,
-                                             "outline": [[plot.tidy(a, wide), plot.tidy(v, high)] for a, v in zip(xs, ys)],
-                                             "tex": label(rf"\text{{area}} {about(area, unsure, d)} {plot.number_tex(area, d)}", "area")},
-                        item, {"area": area})
+                    mid = add(act, beat, "shade", {"kind": "shade", "curve": i,
+                                                   "outline": [[plot.tidy(a, wide), plot.tidy(v, high)] for a, v in zip(xs, ys)],
+                                                   "tex": label(rf"\text{{area}} {about(area, unsure, d)} {plot.number_tex(area, d)}", "area")},
+                              item, {"area": area})
+                    growing(mid, item, f, lo, hi, area, unsure, d)
                 elif kind == "riemann":
                     f = function(i, '"riemann"')
                     if "from" not in item or "to" not in item:
@@ -1413,6 +1468,17 @@ def _plot(b: _Builder, spec: dict, kicker: str) -> Scene:
                     mid = add(act, beat, "tangent", {"kind": "move", "curve": i, "steps": steps, "tangent": True, "anchor": [ax, ay]},
                               item, {"slope": steps[-1][3] / steps[-1][2], "x": ax, "y": ay})
                     moves[mid] = item
+                elif kind == "arrow":
+                    if shape.kind == "implicit":
+                        fail('"arrow" joins two points of a function of x or a curve in t, not of an equation')
+                    key = "t" if shape.kind == "parametric" else "x"
+                    if "from" not in item or "to" not in item:
+                        fail(f'"arrow" needs "from" and "to", the {key} of the point it leaves and of the point it lands on')
+                    ax, ay, a, _ = place(i, {key: item["from"]}, "the start of the arrow", key)
+                    bx, by, far, _ = place(i, {key: item["to"]}, "the end of the arrow", key)
+                    if a == far:
+                        fail('"arrow" needs two different points')
+                    add(act, beat, "arrow", {"kind": "arrow", "curve": i, "from": [ax, ay], "to": [bx, by]}, item)
                 elif kind == "move":
                     if shape.kind == "implicit":
                         fail('"move" follows a function of x or a curve in t, not an equation')
@@ -1439,8 +1505,12 @@ def _plot(b: _Builder, spec: dict, kicker: str) -> Scene:
                     px, py, param, written = place(i, item, f"the {kind}")
                     if kind == "point":
                         qx, qy = quiet(i, param, px, py)
-                        add(act, beat, "point", {"kind": "point", "curve": i, "x": px, "y": py,
-                                                 "tex": label(point_tex(qx, qy, written, figures(item)), "point")}, item, {"x": qx, "y": qy})
+                        only, d = shown_as(item, "point"), figures(item)
+                        tex = {"x": f"x = {written or plot.number_tex(qx, d)}", "y": f"y = {plot.number_tex(qy, d)}"}.get(
+                            only, point_tex(qx, qy, written, d))
+                        add(act, beat, "point", {"kind": "point", "curve": i, "x": px, "y": py, "tex": label(tex, "point"),
+                                                 **({"only": only} if only in ("x", "y") else {})},
+                            item, {k: v for k, v in (("x", qx), ("y", qy)) if only in ("xy", k)})
                     else:
                         dx, dy, unsure = heading_of(i, px, py, param)
                         shows = {"x": px, "y": py}
@@ -1549,7 +1619,7 @@ def _plot(b: _Builder, spec: dict, kicker: str) -> Scene:
     ops = scene.payload["ops"]
     clock = _Clock(b, scene, where)
     stage = _Stage(scene, len(curves), "curve", _staged(spec))
-    shown: dict[str, list[int]] = {"point": [], "tangent": [], "shade": []}
+    shown: dict[str, list[int]] = {"point": [], "tangent": [], "shade": [], "arrow": []}
     moved: set[int] = set()
     for beat in spec.get("beats", []):
         timed = clock.beat(beat)
@@ -1597,7 +1667,7 @@ def _plot(b: _Builder, spec: dict, kicker: str) -> Scene:
                 for mid in shown[kind]:                # a new point, tangent or area replaces the ones of its kind,
                     twin = next((m for k, m in mine      # but one that is listed again as it was simply stays
                                  if k == kind and m not in kept and m != mid and marks[m] == marks[mid]
-                                 and marks[m]["kind"] != "move"), None)
+                                 and m not in moves), None)
                     if twin is not None:
                         kept[twin] = mid
                     elif not any(m == mid for _, m in mine):
@@ -1611,17 +1681,17 @@ def _plot(b: _Builder, spec: dict, kicker: str) -> Scene:
                 started.add(mid)
                 if marks[mid]["curve"] >= stage.visible:
                     b.warn(where, f"a {marks[mid]['kind']} is on curve {marks[mid]['curve'] + 1} before that curve is revealed")
-                at = round(t + 0.12 + (j * 0.3 if marks[mid]["kind"] != "move" else 0), 3)
+                at = round(t + 0.12 + (j * 0.3 if mid not in moves else 0), 3)
                 drawn = max((op["t"] + DRAW for op in ops if op["op"] == "reveal" and op.get("curve") == marks[mid]["curve"]),
                             default=0.0)
                 at = round(max(at, drawn), 3)              # a mark waits for its curve: an area with no curve over it is a blob
                 ops.append({"op": "show", "t": at, "mark": mid})
                 scene.sfx.append((at, "mark" if kind == "shade" else "tick"))
-                if marks[mid]["kind"] == "move":
+                if mid in moves:
                     item = moves[mid]
                     seconds = item.get("seconds")
                     if seconds is not None and not (isinstance(seconds, (int, float)) and 0.5 <= seconds <= 20):
-                        fail('"move": "seconds" is a number from 0.5 to 20')
+                        fail('"seconds" is a number from 0.5 to 20')
                     travel = float(seconds) if seconds else max(1.5, spoken_until - at - 0.5)
                     ops.append({"op": "travel", "t": round(at + 0.35, 3), "mark": mid, "dur": round(travel, 3)})
                     clock.t = max(clock.t, at + 0.35 + travel + GAP)      # the scene waits for the point to arrive

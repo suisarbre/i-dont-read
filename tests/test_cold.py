@@ -227,5 +227,113 @@ class Looking(unittest.TestCase):
         self.assertIn("2 sentence(s) not spoken yet", out.getvalue())
 
 
+class AreaFunctions(unittest.TestCase):
+    """The area under a curve as a curve of its own, worked out by the engine and never typed."""
+
+    def test_it_is_the_integral(self):
+        import math
+        from idr import plot
+        area = plot.Area(plot.Function("1 + sin(x)", "f"), 0, 0, 6.5, "A")
+        self.assertEqual(area.tex(), r"A(x) = \int_{0}^{x} f(t)\,dt")
+        self.assertEqual(area.f(0.0), 0.0)
+        for x in (0.5, 2.0, 6.5):
+            self.assertAlmostEqual(area.f(x), x - math.cos(x) + 1, places=12)
+        self.assertEqual(plot.Area(plot.Function("x^2 - 1"), 1, -2, 2).tex(), r"y = \int_{1}^{x} \left(t^{2} - 1\right)\,dt")
+
+    def test_its_slope_is_the_height_of_the_curve(self):
+        import math
+        from idr import plot
+        area = plot.Area(plot.Function("1 + sin(x)"), 0, 0, 6.5)
+        dx, dy, _ = area.direction(2.0, 6.5, 7.0)
+        self.assertAlmostEqual(dy / dx, 1 + math.sin(2.0), places=8)
+
+    def test_jumps_and_corners_are_added_up_exactly(self):
+        from idr import plot
+        steps = plot.Area(plot.Function("floor(x)"), 0, -2, 2)
+        self.assertAlmostEqual(steps.f(1.7), 0.7, places=12)
+        self.assertAlmostEqual(steps.f(1.0 + 1e-9), 1e-9, places=14)      # right beside the jump, not smeared across it
+        with self.assertRaises(ValueError):                              # a corner in the area: no single slope
+            steps.direction(1.0, 4, 4)
+        self.assertAlmostEqual(plot.Area(plot.Function("abs(x)"), -1, -2, 2).f(1.3), 0.5 + 0.845, places=12)
+
+    def test_what_has_no_area_is_refused(self):
+        from idr import plot
+        for expr, why in [("1/x", "no value"), ("tan(x)", "without bound"), ("sqrt(x)", "no value")]:
+            with self.assertRaises(ValueError) as caught:
+                plot.Area(plot.Function(expr), 1, -2, 2)
+            self.assertIn(why, str(caught.exception))
+
+    def test_a_scene_draws_it_and_marks_it(self):
+        scene, _ = build(graph(curves=[{"expr": "1 + sin(x)", "name": "f"}, {"integral": 1, "from": 0, "name": "A"}],
+                               x=[0, 6.5], y=[0, 7.4],
+                               beats=[{"say": "Area {s.area}, height {p.y}, slope {m.slope}, curve {h.y}.",
+                                       "shade": {"from": 0, "to": 2, "as": "s"},
+                                       "point": [{"x": 2, "on": 2, "label": "y", "as": "p"}, {"x": 2, "label": "y", "as": "h"}],
+                                       "tangent": {"x": 2, "on": 2, "as": "m"}}]))
+        said = " ".join(c["text"] for c in scene.payload["captions"])
+        self.assertIn("Area 3.416, height 3.416, slope 1.909, curve 1.909.", " ".join(said.split()))
+        with self.assertRaises(plan.StoryboardError) as caught:
+            build(graph(curves=[{"integral": 1, "from": 0}, "x"]))
+        self.assertIn("an earlier curve", str(caught.exception))
+
+
+class GrowingAreas(unittest.TestCase):
+    def test_the_running_total_is_worked_out_on_the_way(self):
+        scene, _ = build(graph(expr="x^2", x=[0, 3], y=[0, 9.5],
+                               beats=[{"say": "The area adds up as the edge moves, to {area}.", "shade": {"from": 0, "to": 3, "grow": True}}]))
+        (mark,) = scene.payload["marks"]
+        steps = mark["grow"]
+        self.assertEqual((steps[0], steps[-1]), ([0.0, "area ≈ 0.00"], [3.0, "area = 9"]))
+        self.assertEqual(steps[len(steps) // 3], [1.0, "area ≈ 0.33"])                      # 1 cubed over 3
+        travel = next(op for op in scene.payload["ops"] if op["op"] == "travel")
+        self.assertGreaterEqual(scene.duration, travel["t"] + travel["dur"])                # the scene waits for it
+        self.assertIn("to 9.", scene.payload["captions"][-2]["text"])
+
+
+class Arrows(unittest.TestCase):
+    def test_an_arrow_joins_two_points_of_the_curve(self):
+        scene, _ = build(graph(expr="x^2", y=[0, 9.5], beats=[{"say": "one", "arrow": [{"from": 1, "to": -1.4}, {"from": -1.4, "to": 1.96}]}]))
+        first, second = scene.payload["marks"]
+        self.assertEqual((first["kind"], first["from"], first["to"][0]), ("arrow", [1.0, 1.0], -1.4))
+        self.assertAlmostEqual(first["to"][1], 1.96)
+        self.assertEqual(second["to"][0], 1.96)
+        self.assertAlmostEqual(second["to"][1], 3.8416)
+
+    def test_a_new_arrow_replaces_the_old_and_null_clears(self):
+        scene, _ = build(graph(expr="x^2", y=[0, 9.5], beats=[{"say": "one", "arrow": {"from": 1, "to": 2}},
+                                                              {"say": "two", "arrow": {"from": 2, "to": 1}},
+                                                              {"say": "three", "arrow": None}]))
+        self.assertEqual([(op["op"], op["mark"]) for op in scene.payload["ops"] if op["op"] in ("show", "hide")],
+                         [("show", 0), ("hide", 0), ("show", 1), ("hide", 1)])
+
+    def test_it_must_stay_on_the_graph(self):
+        with self.assertRaises(plan.StoryboardError) as caught:
+            build(graph(expr="x^2", y=[0, 4], beats=[{"say": "one", "arrow": {"from": 1, "to": 2.5}}]))
+        self.assertIn("outside the graph", str(caught.exception))
+
+
+class Labels(unittest.TestCase):
+    def marks(self, **point):
+        return build(graph(expr="x^2", y=[-1, 9.5], beats=[{"say": "one", "point": {"x": 2, **point}}]))[0].payload["marks"][0]
+
+    def test_a_point_can_show_one_coordinate_or_none(self):
+        self.assertEqual(self.marks()["tex"], r"\left(2,\ 4\right)")
+        self.assertEqual((self.marks(label="x")["tex"], self.marks(label="x")["only"]), ("x = 2", "x"))
+        self.assertEqual(self.marks(label="y")["tex"], "y = 4")
+        self.assertNotIn("tex", self.marks(label="none"))
+        self.assertEqual(self.marks(side="left")["side"], "left")
+
+    def test_the_narration_quotes_only_what_the_label_shows(self):
+        for label in ("x", "none"):
+            with self.assertRaises(plan.StoryboardError):
+                build(graph(expr="x^2", y=[-1, 9.5], beats=[{"say": "It is {y} high.", "point": {"x": 2, "label": label}}]))
+
+    def test_bad_choices_are_named(self):
+        for point, why in [({"label": "big"}, '"label" on a point'), ({"side": "north"}, '"side" is where')]:
+            with self.assertRaises(plan.StoryboardError) as caught:
+                self.marks(**point)
+            self.assertIn(why, str(caught.exception))
+
+
 if __name__ == "__main__":
     unittest.main()

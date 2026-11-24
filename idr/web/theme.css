@@ -227,6 +227,9 @@ body { font-family: "IDR Sans", sans-serif; -webkit-font-smoothing: antialiased;
 .scene.plot .legend .live { font-family: "IDR Sans", sans-serif; font-size: 0.72em; color: var(--mute); margin-left: 6px;
   font-variant-numeric: tabular-nums; min-width: 5.2em; }
 .scene.plot svg .tangent { stroke: var(--ink); stroke-width: 3.5; stroke-linecap: round; opacity: 0; }
+.scene.plot svg .arrow { opacity: 0; }
+.scene.plot svg .arrow line { stroke: var(--ink); stroke-width: 4; stroke-linecap: round; }
+.scene.plot svg .arrow path { fill: var(--ink); stroke: var(--ink); stroke-width: 2; stroke-linejoin: round; }
 .scene.plot svg .guide { fill: none; stroke: var(--ink); stroke-width: 2.5; stroke-dasharray: 3 9; stroke-linecap: round; opacity: 0; }
 .scene.plot svg .dot { fill: var(--c); stroke: var(--bg); stroke-width: 4; }
 .scene.plot .tag { position: absolute; background: var(--bg); border: 1.5px solid var(--line); border-radius: 12px; padding: 7px 16px;

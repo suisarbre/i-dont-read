@@ -164,7 +164,7 @@ def _moments(scene, every_beat: bool) -> list[tuple[float, str]]:
     for op in scene.payload.get("ops", []):
         if op.get("dur", 0) >= 1.2:
             moments.append((op["t"] + op["dur"] / 2, "  ·  half-way"))
-    return sorted(moments) + [(end, "")]
+    return sorted(set(moments)) + [(end, "")]            # two points that travel together are one half-way frame
 
 
 def _picked(text: str | None, count: int) -> set[int]:
