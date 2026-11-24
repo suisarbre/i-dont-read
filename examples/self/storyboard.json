@@ -1,0 +1,213 @@
+{
+  "title": "i-dont-read, explained by itself",
+  "chapters": [
+    {
+      "title": "How a scene gets filmed",
+      "say": "How does a web page become a video? One frame at a time.",
+      "scenes": [
+        {
+          "type": "code",
+          "heading": "The filming loop",
+          "file": "idr/render.py",
+          "lines": [
+            85,
+            96
+          ],
+          "expect": "for i in range(scene.frames):",
+          "beats": [
+            {
+              "say": "This loop is the heart of the renderer. It runs once for every frame of the scene.",
+              "highlight": 86
+            },
+            {
+              "say": "First, it asks the page to draw itself at one exact moment, and the page answers a single question: did anything change?",
+              "highlight": 87,
+              "note": "draw the frame at time t"
+            },
+            {
+              "say": "Only when the picture changed does it take a new screenshot.",
+              "highlight": [
+                88,
+                90
+              ],
+              "note": "capture only on change"
+            },
+            {
+              "say": "Either way, a frame goes down the pipe to the encoder. A still moment just sends the same picture again.",
+              "highlight": 91
+            },
+            {
+              "say": "When the encoder exits cleanly, the temporary file gets its real name, so a half finished render can never pass for a complete one.",
+              "highlight": [
+                93,
+                95
+              ],
+              "note": "rename only on success"
+            }
+          ]
+        },
+        {
+          "type": "flow",
+          "heading": "From storyboard to video",
+          "nodes": [
+            {
+              "label": "Storyboard",
+              "desc": "Chapters, sentences, and what to show"
+            },
+            {
+              "label": "Voice",
+              "desc": "One clip per sentence, made locally"
+            },
+            {
+              "label": "Timeline",
+              "desc": "Each beat lasts as long as its sentence"
+            },
+            {
+              "label": "Film",
+              "desc": "Chrome draws, the encoder records"
+            },
+            {
+              "label": "Mix",
+              "desc": "Narration plus sound effects"
+            }
+          ],
+          "beats": [
+            {
+              "say": "Zooming out, filming is one of five steps. It starts with a storyboard: the chapters, the sentences, and what to show for each.",
+              "reveal": 1,
+              "focus": 1
+            },
+            {
+              "say": "Every sentence is spoken by a voice model that runs locally. No account or key is needed.",
+              "reveal": 2,
+              "focus": 2
+            },
+            {
+              "say": "The length of each spoken clip sets the timeline, so the picture always follows the voice.",
+              "reveal": 3,
+              "focus": 3
+            },
+            {
+              "say": "Then each scene is filmed, the way you just saw.",
+              "reveal": 4,
+              "focus": 4
+            },
+            {
+              "say": "Finally, narration and sound effects are mixed in, and the chapters are joined.",
+              "reveal": 5,
+              "focus": 5
+            },
+            {
+              "say": "That is the whole pipeline."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "What makes it different",
+      "say": "Plenty of tools can summarize a repo. Here is what this one promises.",
+      "scenes": [
+        {
+          "type": "quote",
+          "heading": "The promises in the README",
+          "file": "README.md",
+          "lines": [
+            9,
+            12
+          ],
+          "beats": [
+            {
+              "say": "The first promise is that the source on screen is the real thing, read from the file and never retyped.",
+              "mark": "Nothing is retyped."
+            },
+            {
+              "say": "The voice is a model that runs on your own machine.",
+              "mark": "no account or API key is needed"
+            },
+            {
+              "say": "And every idea gets a chapter of its own, with a hard cut between them.",
+              "mark": "One idea per chapter."
+            }
+          ]
+        },
+        {
+          "type": "compare",
+          "heading": "Reading a summary, or watching one",
+          "columns": [
+            {
+              "title": "A written summary",
+              "points": [
+                "Describes the code",
+                "You look up the file yourself",
+                "One long block of text"
+              ]
+            },
+            {
+              "title": "This video",
+              "points": [
+                "Shows the actual lines",
+                "File and line numbers on screen",
+                "One idea per chapter"
+              ]
+            }
+          ],
+          "beats": [
+            {
+              "say": "A written summary describes the code. This shows you the actual lines.",
+              "reveal": 1
+            },
+            {
+              "say": "It also tells you where they live, down to the line number.",
+              "reveal": 2
+            },
+            {
+              "say": "And it breaks the explanation into chapters you can jump between.",
+              "reveal": 3
+            }
+          ]
+        },
+        {
+          "type": "stats",
+          "heading": "The engine in numbers",
+          "items": [
+            {
+              "value": "30",
+              "label": "frames per second",
+              "note": "FPS in idr/plan.py"
+            },
+            {
+              "value": "5",
+              "label": "sound effects, all synthesized",
+              "note": "EFFECTS in idr/sfx.py"
+            },
+            {
+              "value": "5",
+              "label": "kinds of scene",
+              "note": "SCENES in idr/plan.py"
+            },
+            {
+              "value": "2",
+              "label": "themes",
+              "note": "idr/web/theme.css"
+            }
+          ],
+          "beats": [
+            {
+              "say": "Under the hood, the engine is small. It films at thirty frames a second.",
+              "reveal": 1
+            },
+            {
+              "say": "It ships five sound effects and five kinds of scene.",
+              "reveal": 3
+            },
+            {
+              "say": "And it comes in two themes, light and dark. Don't read. Just watch.",
+              "reveal": 4
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
