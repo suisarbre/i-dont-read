@@ -7,6 +7,7 @@ a number is named instead of skipped.
 """
 from __future__ import annotations
 
+import math
 import re
 
 from . import plan, plot, source
@@ -14,21 +15,60 @@ from .plan import StoryboardError
 
 MAX_BARS = 12        # rows of a bar chart
 MAX_POINTS = 400     # rows of a line chart
-_NUMBER = re.compile(r"^\s*(?:[~≈]\s*)?([$€£¥₩]?)\s*([-+−]?)\s*(\d[\d,]*(?:\.\d+)?|\.\d+)(?:[eE]([-+]?\d+))?\s*([^\d\s].*)?$")
+_UNIT = r"[A-Za-zµμ°Ω%‰$€£¥₩][A-Za-z0-9µμ°Ω%‰/·²³]{0,9}"
+# A sign, digits (commas only between groups of three), a decimal point, a power of ten, and one unit at most.
+_NUMBER = re.compile(r"^(?:[~≈]\s*)?(?P<cur>[$€£¥₩])?\s*(?P<sign>[-+−])?\s*(?P<cur2>[$€£¥₩])?\s*"
+                     r"(?P<whole>\d{1,3}(?:,\d{3})+|\d+)?(?P<frac>\.\d+)?(?:[eE](?P<exp>[-+]?\d{1,4}))?"
+                     r"\s*(?P<unit>" + _UNIT + r")?$")
+_DECIMAL_COMMA = re.compile(r"^[-+−]?\s*(?:\d+|\d{1,3}(?:[. ]\d{3})+),\d+(?:\s*" + _UNIT + r")?$")
+# What a header may give in brackets as the unit of its column: "time (ms)", "size [KB]", "rate (req/s)".
+_KNOWN_UNITS = set("""% ‰ ns µs μs us ms s sec secs min mins h hr hrs d days B KB MB GB TB PB kB KiB MiB GiB TiB bit bits
+    byte bytes bps kbps Mbps Gbps Hz kHz MHz GHz W kW MW GW Wh kWh MWh V mV A mA J kJ cal kcal K °C °F m cm mm µm μm nm km
+    in ft mi g kg mg µg lb oz t L l mL ml px pt em fps rpm rps qps tps ops $ € £ ¥ ₩ USD EUR GBP JPY KRW CNY""".split())
+_HEADER_UNIT = re.compile(r"[(\[]\s*([^()\[\]\s]{1,10})\s*[)\]]\s*$")
 
 
 def reading(cell: str) -> tuple[float, str] | None:
     """The number a cell holds and its unit ("12.5 ms" is 12.5 and ms; "$1,200" is 1200 and $), or None for an
-    empty cell. A cell that is not a number raises ValueError."""
-    text = cell.strip().strip("$").strip() if cell.strip().startswith("$") and cell.strip().endswith("$") and len(cell.strip()) > 1 else cell.strip()
+    empty cell. A cell that is anything else raises ValueError: a chart draws a cell only when the whole of it
+    is one number, because a length drawn from the first digits of "1:45" or "1,25" would be a different number."""
+    text = cell.strip()
+    if len(text) > 2 and text.startswith("$") and text.endswith("$") and "$" not in text[1:-1]:
+        text = text[1:-1].strip()                      # $-0.8$ is how a paper writes a number in a table
     if not text or text in ("-", "–", "—", "n/a", "N/A", "NA"):
         return None
     m = _NUMBER.match(text)
-    if not m:
-        raise ValueError(f"{cell!r} is not a number")
-    currency, sign, digits, power, unit = m.groups()
-    value = float(digits.replace(",", "")) * (10 ** int(power) if power else 1)
-    return (-value if sign in ("-", "−") else value), (currency or (unit or "").strip())
+    if not m or (m["whole"] is None and m["frac"] is None) or (m["cur"] and m["cur2"]):
+        if _DECIMAL_COMMA.match(text):
+            raise ValueError(f"{cell!r} looks like a number written with a decimal comma, and a chart reads a decimal "
+                             "point (1.25), with commas only between groups of three digits (1,250)")
+        raise ValueError(f"{cell!r} is not a plain number (digits, with one unit such as ms or % at most)")
+    value = float(f"{(m['whole'] or '0').replace(',', '')}{m['frac'] or ''}e{m['exp'] or '0'}")
+    if not math.isfinite(value) or re.fullmatch(r"[eE]\d+", m["unit"] or ""):      # 1e400, 1e99999
+        raise ValueError(f"{cell!r} is too large to draw")
+    currency, unit = m["cur"] or m["cur2"] or "", m["unit"] or ""
+    if currency and unit:
+        raise ValueError(f"{cell!r} has two units ({currency} and {unit})")
+    return (-value if m["sign"] in ("-", "−") else value), currency or unit
+
+
+def header_unit(name: str) -> str:
+    """The unit a column's header gives in brackets, or "": "time (ms)" is in ms; "score (higher is better)" is not a unit."""
+    m = _HEADER_UNIT.search(name)
+    if m and (m.group(1) in _KNOWN_UNITS or ("/" in m.group(1) and re.fullmatch(_UNIT, m.group(1)))):
+        return m.group(1)
+    return ""
+
+
+def _marks(low: float, high: float, about: int, whole: bool = False) -> list[list]:
+    """Round positions between low and high, each with a label that has enough digits to tell it from the next."""
+    marks = plot.ticks(low, high, about)
+    if whole:                                             # positions that are all whole numbers (years) get no half-steps
+        marks = [v for v in marks if abs(v - round(v)) < 1e-9] or marks
+    step = min((b - a for a, b in zip(marks, marks[1:])), default=abs(high) or 1.0)
+    big = max(abs(v) for v in marks) or step
+    digits = max(4, int(math.floor(math.log10(big))) - int(math.floor(math.log10(step) + 1e-9)) + 1)
+    return [[v, plot.minus(plot.number(v, digits))] for v in marks]
 
 
 def _titled(name: str, unit: str) -> str:
@@ -40,7 +80,7 @@ def _titled(name: str, unit: str) -> str:
 
 def _chart(b, spec: dict, kicker: str) -> plan.Scene:
     where = spec.get("heading") or "chart"
-    plan._only(spec, {"type", "heading", "sub", "beats", "file", "lines", "rows", "ref", "encoding", "expect", "x", "y", "kind"},
+    plan._only(spec, {"type", "heading", "sub", "beats", "file", "lines", "rows", "ref", "encoding", "expect", "x", "y", "kind", "spacing"},
                "a chart scene", where)
     name = spec.get("file")
     if not name:
@@ -117,40 +157,78 @@ def _chart(b, spec: dict, kicker: str) -> plan.Scene:
                                   "one axis cannot measure both")
         if not any(v is not None for v in values):
             raise StoryboardError(f"{where}: column {header[yi]!r} has no numbers in these rows")
+        in_cells, in_header = next(iter(unit), ""), header_unit(header[yi])
+        if in_cells and in_header and in_cells != in_header:
+            raise StoryboardError(f"{where}: the header {header[yi]!r} says {in_header}, and the cells under it are in "
+                                  f"{in_cells}; the chart cannot tell which is meant, so show the column in a table")
         series.append({"name": header[yi], "values": values, "texts": [row[yi] for row in rows]})
-        units.append(next(iter(unit), ""))
+        units.append(in_cells or in_header)
     if len(set(units)) > 1:
-        raise StoryboardError(f"{where}: the columns are in different units ({', '.join(repr(u) for u in units)}), and one "
-                              "axis cannot measure both; draw them in two chart scenes")
+        raise StoryboardError(f"{where}: the columns are in different units ("
+                              + ", ".join(f"{header[yi]!r} in {u}" if u else f"{header[yi]!r} with none" for yi, u in zip(ys, units))
+                              + "), and one axis cannot measure both; draw them in two chart scenes")
     numbers = [v for s in series for v in s["values"] if v is not None]
     low, high = min(numbers), max(numbers)
     if kind == "bar" or 0 <= low <= 0.6 * high or high <= 0 <= low:
         low, high = min(low, 0.0), max(high, 0.0)          # bars are lengths, so they are measured from zero
-    if high == low:
-        high = low + 1.0
-    import math
-    marks = plot.ticks(low, high, 5)                   # the axis runs between round numbers that take in every value
-    step = marks[1] - marks[0] if len(marks) > 1 else high - low
-    bottom, top = math.floor(low / step + 1e-9) * step, math.ceil(high / step - 1e-9) * step
-    marks = plot.ticks(bottom, top, max(1, round((top - bottom) / step)))
-    axis = {"min": bottom, "max": top, "ticks": [[v, plot.minus(plot.number(v))] for v in marks],
+    try:
+        if high == low:
+            high = low + (abs(low) or 1.0)
+        step = plot.ticks(low, high, 5)                   # the axis runs between round numbers that take in every value
+        step = step[1] - step[0] if len(step) > 1 else high - low
+        first, last_ = math.floor(low / step + 1e-9), math.ceil(high / step - 1e-9)
+        bottom, top = float(f"{first * step:.12g}"), float(f"{last_ * step:.12g}")
+        marks = _marks(bottom, top, max(1, last_ - first))
+        if not (math.isfinite(bottom) and math.isfinite(top) and top > bottom and len(marks) >= 2
+                and len({text for _, text in marks}) == len(marks)):
+            raise ValueError
+    except (OverflowError, ZeroDivisionError, ValueError):
+        raise StoryboardError(f"{where}: the numbers in {', '.join(repr(header[yi]) for yi in ys)} run from {low:g} to "
+                              f"{high:g}, which is too large, too small or too close together to mark on an axis; "
+                              "show them in a table") from None
+    axis = {"min": bottom, "max": top, "ticks": marks,
             "title": _titled(header[ys[0]] if len(ys) == 1 else "", units[0])}
 
     labels = [row[xi] for row in rows]
     payload: dict = {"chart": kind, "labels": labels, "series": series, "axis": axis}
+    spacing = spec.get("spacing")
+    if spacing not in (None, "even", "numbers") or (spacing and kind != "line"):
+        raise StoryboardError(f'{where}: "spacing" is "even" or "numbers", on a line chart: whether the rows are spread '
+                              f"evenly along x or placed by the number in {header[xi]!r}")
     if kind == "line":
-        positions = None
+        # The rows are placed by their x values only when every one is a plain number in one unit, in rising
+        # order. A date, a time, a version or "2 MB" after "1 KB" is a name: placing it by its first digits would
+        # draw distances the file does not hold.
+        positions, why = None, ""
         try:
             got = [reading(text) for text in labels]
-            if all(g is not None for g in got) and all(a[0] < z[0] for a, z in zip(got, got[1:])):
+            if any(g is None for g in got):
+                why = "one of them is empty"
+            elif len({g[1] for g in got}) > 1:
+                why = f"they are in different units ({', '.join(sorted({g[1] or 'none' for g in got}))})"
+            elif not all(a[0] < z[0] for a, z in zip(got, got[1:])):
+                why = "they are not in rising order"
+            elif len(places := {len(t.partition(".")[2]) for t in (re.sub(r"[^\d.]", "", text) for text in labels)}) > 1 \
+                    and any(re.search(r"\.\d*0$", re.sub(r"[^\d.]", "", text)) for text in labels):
+                why = "they are written the way versions are (2.10 beside 2.9), not as measurements"
+            else:
                 positions = [g[0] for g in got]
-        except ValueError:
-            pass
-        if positions:
-            x_marks = [v for v in plot.ticks(positions[0], positions[-1], 6)]
+        except ValueError as problem:
+            why = str(problem)
+        if spacing == "numbers" and not positions:
+            raise StoryboardError(f'{where}: "spacing": "numbers" places the rows by {header[xi]!r}, but {why}')
+        if positions and spacing != "even":
+            whole = all(abs(v - round(v)) < 1e-9 for v in positions)
+            try:
+                x_marks = _marks(positions[0], positions[-1], 6, whole)
+                if len({text for _, text in x_marks}) != len(x_marks):
+                    raise ValueError
+            except (OverflowError, ZeroDivisionError, ValueError):
+                raise StoryboardError(f"{where}: the values of {header[xi]!r} are too large or too close together to "
+                                      'mark on an axis; add "spacing": "even" to spread the rows evenly') from None
             payload["x"] = {"numeric": True, "at": positions, "min": positions[0], "max": positions[-1],
-                            "ticks": [[v, plot.minus(plot.number(v))] for v in x_marks], "title": header[xi]}
-        else:                                           # names or dates: evenly spaced, in the file's order
+                            "ticks": x_marks, "title": header[xi]}
+        else:                                           # names, dates, versions: evenly spaced, in the file's order
             show = max(1, -(-len(labels) // 8))
             payload["x"] = {"numeric": False, "at": list(range(len(labels))), "min": 0, "max": len(labels) - 1,
                             "ticks": [[i, labels[i]] for i in range(0, len(labels), show)], "title": header[xi]}
@@ -233,5 +311,6 @@ def _chart(b, spec: dict, kicker: str) -> plan.Scene:
                     scene.sfx.append((round(t + 0.05, 3), "tick"))
                 lit = target
     stage.upto(len(series), clock.t)
-    clock.finish()
+    last = max((op["t"] for op in ops if op["op"] == "reveal"), default=0.0)
+    clock.finish(minimum=last + (1.4 if kind == "line" else 1.2 + 0.04 * len(rows)))    # drawn before the scene ends
     return scene

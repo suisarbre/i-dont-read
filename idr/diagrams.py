@@ -10,6 +10,22 @@ from __future__ import annotations
 from . import plan
 from .plan import StoryboardError
 
+def _words(value, what: str, where: str, needed: bool = True) -> str | None:
+    """A piece of text for the screen: a string with something in it. Anything else would be filmed as it is
+    ("[object Object]", an empty box), so it is refused here."""
+    if value is None and not needed:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise StoryboardError(f"{where}: {what} is a piece of text, not {value!r}")
+    return " ".join(value.split())
+
+
+def _flag(item: dict, key: str, what: str, where: str) -> bool:
+    if not isinstance(item.get(key, False), bool):
+        raise StoryboardError(f'{where}: "{key}" on {what} is true or false, not {item[key]!r}')
+    return item.get(key, False)
+
+
 # --- a diagram with branches ---------------------------------------------------------------------
 
 MAX_NODES = 10
@@ -118,23 +134,29 @@ def layout(ids: list[str], edges: list[tuple[str, str]]) -> dict:
 def _diagram(b, spec: dict, kicker: str) -> plan.Scene:
     where = spec.get("heading") or "diagram"
     plan._only(spec, {"type", "heading", "sub", "beyond", "math", "beats", "nodes", "edges", "direction"}, "a diagram scene", where)
-    nodes, edges = spec["nodes"], spec.get("edges") or []
+    if not isinstance(spec["nodes"], list) or not isinstance(spec.get("edges") or [], list):
+        raise StoryboardError(f'{where}: "nodes" and "edges" are lists of objects')
+    nodes, edges = ([dict(x) if isinstance(x, dict) else x for x in given] for given in (spec["nodes"], spec.get("edges") or []))
     if not 2 <= len(nodes) <= MAX_NODES:
         raise StoryboardError(f"{where}: a diagram shows 2 to {MAX_NODES} nodes, not {len(nodes)}; split it into two scenes")
     ids = []
     for node in nodes:
-        if not isinstance(node, dict) or not node.get("label"):
+        if not isinstance(node, dict) or "label" not in node:
             raise StoryboardError(f'{where}: a node is an object such as {{"id": "parse", "label": "Parse"}}, not {node!r}')
         plan._only(node, {"id", "label", "desc"}, "a node", where)
-        ids.append(str(node.get("id") or node["label"]))
+        node["label"] = _words(node["label"], "a node's label", where)
+        node["desc"] = _words(node.get("desc"), f"the \"desc\" of {node['label']!r}", where, needed=False)
+        if "id" in node and (isinstance(node["id"], bool) or not isinstance(node["id"], (str, int)) or not str(node["id"]).strip()):
+            raise StoryboardError(f"{where}: the \"id\" of {node['label']!r} is a short name, not {node['id']!r}")
+        ids.append(str(node["id"]).strip() if "id" in node else node["label"])
     for name in ids:
         if ids.count(name) > 1:
             raise StoryboardError(f'{where}: two nodes are called {name!r}; give each its own "id"')
 
     def known(name, what: str) -> str:
-        if str(name) not in ids:
+        if isinstance(name, bool) or not isinstance(name, (str, int)) or str(name).strip() not in ids:
             raise StoryboardError(f"{where}: {what} names {name!r}, which is not a node; the nodes are {', '.join(ids)}")
-        return str(name)
+        return str(name).strip()
 
     pairs = []
     for edge in edges:
@@ -145,6 +167,8 @@ def _diagram(b, spec: dict, kicker: str) -> plan.Scene:
         if pair in pairs:
             raise StoryboardError(f"{where}: the edge from {pair[0]!r} to {pair[1]!r} is listed twice")
         pairs.append(pair)
+        edge["label"] = _words(edge.get("label"), f"the label of the edge from {pair[0]!r} to {pair[1]!r}", where, needed=False)
+        _flag(edge, "dashed", "an edge", where)
         if len(str(edge.get("label") or "")) > 18:
             b.warn(where, f"edge label {edge['label']!r} is over 18 characters; it sits on the arrow, so keep it to a word or two")
     direction = spec.get("direction") or ("down" if b.fmt == "tall" else "right")
@@ -206,6 +230,10 @@ def _diagram(b, spec: dict, kicker: str) -> plan.Scene:
                 if path:
                     scene.sfx.append((round(t + 0.05, 3), "tick"))
                 walked = path
+    left = len(ids) - stage.visible
+    if left and stage.visible:
+        b.warn(where, f"the beats reveal {stage.visible} of the {len(ids)} nodes, so the other {left} appear only as the "
+               "scene ends, with no sentence about them; reveal them in a beat, or leave them out")
     stage.upto(len(ids), clock.t)
     # An arrow is drawn once both its ends are there.
     seen = {op["node"]: op["t"] for op in ops if op["op"] == "reveal"}
@@ -214,7 +242,7 @@ def _diagram(b, spec: dict, kicker: str) -> plan.Scene:
     first = min(seen.values(), default=0.0)
     if first > plan.LEAD + 1.0:
         b.warn(where, f"nothing is on screen for the first {first:.1f} seconds; reveal the first node when the first sentence starts")
-    clock.finish()
+    clock.finish(minimum=max(op["t"] for op in ops) + 0.9)      # the last arrow has been drawn before the scene ends
     return scene
 
 
@@ -243,7 +271,12 @@ def _array(b, spec: dict, kicker: str) -> plan.Scene:
     if capacity is not None and (isinstance(capacity, bool) or not isinstance(capacity, int) or not 1 <= capacity <= room):
         raise StoryboardError(f'{where}: "capacity" is how many cells the row can hold, a whole number from 1 to {room}')
     ends = spec.get("ends") or {}
+    if not isinstance(ends, dict):
+        raise StoryboardError(f'{where}: "ends" names the two ends of the row, as in {{"front": "oldest", "back": "newest"}}; not {ends!r}')
     plan._only(ends, {"front", "back"}, '"ends"', where)
+    ends = {k: _words(v, f'"ends": "{k}"', where) for k, v in ends.items()}
+    if not isinstance(spec.get("items") or [], list):
+        raise StoryboardError(f'{where}: "items" is a list of what the cells hold at the start, not {spec["items"]!r}')
     cells = [{"id": i, "text": text(v)} for i, v in enumerate(spec.get("items") or [])]     # every cell that ever exists
     row = [c["id"] for c in cells]                                                             # the row now, front first
     most = len(row)
@@ -341,19 +374,23 @@ def _array(b, spec: dict, kicker: str) -> plan.Scene:
     ops = scene.payload["ops"]
     clock = plan._Clock(b, scene, where)
     marked, pointed = [], {}
-    for beat in spec.get("beats", []):
+    free = 0.0                 # when the last operation has landed. The player replays what happens in order of
+    for beat in spec.get("beats", []):     # time, so nothing may be timed before an operation worked out ahead of it.
         for t, act, src in clock.beat(beat):
             did = False
             if "do" in act:
                 given = act["do"] if isinstance(act["do"], list) else [act["do"]]
-                for j, op in enumerate(given):
+                if not given:
+                    raise StoryboardError(f'{where}: "do" takes an operation such as {{"push": "d"}}, or a list of them; it is empty')
+                for op in given:
                     if not isinstance(op, dict):
                         raise StoryboardError(f'{where}: "do" takes an operation such as {{"push": "d"}}, or a list of them; not {op!r}')
-                    at = round(t + 0.05 + j * 0.7, 3)
+                    at = round(max(t + 0.05, free), 3)
                     ops.append({"op": "change", "t": at, **apply(op)})
                     scene.sfx.append((at, "pop" if "enter" in ops[-1] else "tick"))
-                    did = True
+                    free, did = at + 0.7, True
                 clock.t = max(clock.t, at + 0.8 + plan.GAP)            # the last move has landed before the next sentence
+            after = round(max(t + 0.05, free), 3)       # marks and pointers are placed on the row once it has settled
             # Marks and pointers are about the row as it stands; an operation, or a new sentence, clears them.
             if "mark" in act:
                 given = act["mark"]
@@ -361,7 +398,7 @@ def _array(b, spec: dict, kicker: str) -> plan.Scene:
             else:
                 target = [] if (src is beat or did) else marked
             if target != marked:
-                ops.append({"op": "mark", "t": round(t + (0.75 if did else 0.05), 3), "cells": target})
+                ops.append({"op": "mark", "t": after, "cells": target})
                 marked = target
             if "pointers" in act:
                 given = act["pointers"] or {}
@@ -375,8 +412,10 @@ def _array(b, spec: dict, kicker: str) -> plan.Scene:
             else:
                 names = {} if (src is beat or did) else pointed
             if names != pointed:
-                ops.append({"op": "pointers", "t": round(t + (0.75 if did else 0.05), 3), "at": names})
+                ops.append({"op": "pointers", "t": after, "at": names})
                 pointed = names
+            if did and (target or names):                 # placed after the operations, so held long enough to be read
+                clock.t = max(clock.t, after + 1.2 + plan.GAP)
     clock.finish()
     on = plan._math_on(b, spec)
     scene.payload["cells"] = [{"id": c["id"], "text": b.rich(c["text"], on, where)} for c in cells]
@@ -394,14 +433,14 @@ MAX_MESSAGES = {"wide": 9, "tall": 14}
 def _sequence(b, spec: dict, kicker: str) -> plan.Scene:
     where = spec.get("heading") or "sequence"
     plan._only(spec, {"type", "heading", "sub", "beyond", "math", "beats", "actors", "messages"}, "a sequence scene", where)
-    actors = [str(a) for a in spec["actors"]]
+    if not isinstance(spec["actors"], list):
+        raise StoryboardError(f'{where}: "actors" is a list of the parties, left to right, not {spec["actors"]!r}')
+    actors = [_words(a, "a party's name", where) for a in spec["actors"]]
     if not 2 <= len(actors) <= MAX_ACTORS[b.fmt]:
         raise StoryboardError(f"{where}: a sequence has 2 to {MAX_ACTORS[b.fmt]} parties in a {b.fmt} frame, not {len(actors)}")
     for name in actors:
         if actors.count(name) > 1:
             raise StoryboardError(f"{where}: two parties are called {name!r}")
-        if len(name) > 16:
-            b.warn(where, f"the name {name!r} is over 16 characters and may not fit above its line")
     messages = spec["messages"]
     if not 1 <= len(messages) <= MAX_MESSAGES[b.fmt]:
         raise StoryboardError(f"{where}: a sequence shows 1 to {MAX_MESSAGES[b.fmt]} messages in a {b.fmt} frame, not "
@@ -414,13 +453,12 @@ def _sequence(b, spec: dict, kicker: str) -> plan.Scene:
                                   f'{{"from": "{actors[0]}", "to": "{actors[1]}", "label": "request"}}; not {m!r}')
         plan._only(m, {"from", "to", "label", "reply"}, "a message", where)
         for end in ("from", "to"):
-            if str(m[end]) not in actors:
+            if not isinstance(m[end], str) or " ".join(m[end].split()) not in actors:
                 raise StoryboardError(f"{where}: message {n} names {m[end]!r}, which is not one of the parties: {', '.join(actors)}")
-        span = abs(actors.index(str(m["from"])) - actors.index(str(m["to"])))
-        if len(m["label"]) > (24 if span == 0 else 22 + 16 * (span - 1)):
-            b.warn(where, f"message {n}, {m['label'][:24]!r}..., is long for the space between its two parties and may be cut")
-        rows.append({"from": actors.index(str(m["from"])), "to": actors.index(str(m["to"])),
-                     "label": b.rich(m["label"], on, where), "reply": bool(m.get("reply"))})
+        ends_ = [actors.index(" ".join(m[end].split())) for end in ("from", "to")]
+        rows.append({"from": ends_[0], "to": ends_[1],             # whether a label fits is measured where it is drawn
+                     "label": b.rich(_words(m["label"], f"the label of message {n}", where), on, where),
+                     "reply": _flag(m, "reply", "a message", where)})
     scene = b.scene("sequence", kicker, spec, actors=actors, messages=rows)
     scene.sfx.append((0.0, "whoosh"))
     clock = plan._Clock(b, scene, where)
@@ -439,9 +477,13 @@ def _sequence(b, spec: dict, kicker: str) -> plan.Scene:
             if target != focused:
                 scene.payload["ops"].append({"op": "focus", "t": round(t + 0.05, 3), "message": target})
                 focused = target
+    left = len(rows) - stage.visible
+    if left and stage.visible:
+        b.warn(where, f"the beats reveal {stage.visible} of the {len(rows)} messages, so the other {left} appear only as "
+               "the scene ends, with no sentence about them; reveal them in a beat, or leave them out")
     stage.upto(len(rows), clock.t)
     first = min((op["t"] for op in scene.payload["ops"] if op["op"] == "reveal"), default=0.0)
     if first > plan.LEAD + 1.0:
         b.warn(where, f"nothing is on screen for the first {first:.1f} seconds; reveal the first message when the first sentence starts")
-    clock.finish()
+    clock.finish(minimum=max(op["t"] for op in scene.payload["ops"]) + 0.9)   # the last message has been drawn before the end
     return scene

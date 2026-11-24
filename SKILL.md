@@ -66,7 +66,7 @@ python -m idr doctor
 
 To change a finished video, edit the storyboard and render again. Scenes that did not change are reused and sentences that did not change are not re-spoken.
 
-`--root` is the folder that `file` paths in the storyboard are relative to: the root of the repo or the folder holding the document. When every scene shows a web address, or the video has no source (`"source": "none"`), any folder will do (use `work`).
+`--root` is the folder that `file` paths in the storyboard are relative to: the root of the repo or the folder holding the document. A `file` outside that folder (through `..`, an absolute path, or a link that points out of it) is an error: a scene shows files of the source. When every scene shows a web address, or the video has no source (`"source": "none"`), any folder will do (use `work`).
 
 ## 4. Storyboard format
 

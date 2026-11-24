@@ -133,12 +133,12 @@ def cmd_check(args) -> None:
 
 
 def _misfits(scenes, fmt: str) -> list[str]:
-    """Formulas, graphs and notes that do not fit on screen. Only laying a scene out with the real fonts can
+    """Formulas, graphs, notes and labels that do not fit on screen. Only laying a scene out with the real fonts can
     tell, so the scenes that hold them are built in the browser once, without filming them. A line that starts
     with "~" is a warning: nothing is cut off, but something sits badly."""
     def worth(scene) -> bool:
         kind = scene.payload.get("type")
-        return kind in ("math", "plot") or (kind in ("code", "diff") and any(
+        return kind in ("math", "plot", "diagram", "sequence") or (kind in ("code", "diff") and any(
             op.get("op") == "note" and op.get("text") for op in scene.payload.get("ops", [])))
     laid_out = [scene for scene in scenes if worth(scene)]
     if not laid_out:
@@ -150,7 +150,7 @@ def _misfits(scenes, fmt: str) -> list[str]:
                 studio._load(scene)
             return list(studio.problems)
     except Exception as problem:                           # no browser here: preview and render will say it instead
-        print(f"warning: could not lay out the math scenes to see whether they fit ({type(problem).__name__})")
+        print(f"warning: could not lay out the scenes to see whether everything in them fits ({type(problem).__name__})")
         return []
 
 

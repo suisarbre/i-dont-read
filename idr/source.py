@@ -120,14 +120,27 @@ def _decode(data: bytes, name: str, encoding: str | None = None) -> str:
     return text.replace("\r\n", "\n").replace("\r", "\n")
 
 
+def inside(root: Path, file: str, scene: str) -> Path:
+    """The path of a file of the source. A scene shows the source, so a path that leaves its folder (through
+    "..", an absolute path, or a link that points out of it) is refused: that file is not part of what the
+    video says it shows."""
+    if not isinstance(file, str) or not file.strip():
+        raise ValueError(f'{scene} scene: "file" is the path of a file in the source, not {file!r}')
+    path = (root / file).resolve()
+    if not path.is_relative_to(root.resolve()):
+        raise ValueError(f"{scene} scene: {file} is outside the source folder ({root}). A scene shows files of the "
+                         "source: copy the file into that folder, or pass the folder that holds both as --root")
+    return path
+
+
 def _read(root: Path, file: str, ref: str | None, scene: str, encoding: str | None = None) -> str:
     """A file's text: as it is on disk, or as it was at a git ref."""
+    path = inside(root, file, scene)
     if ref:
         text = _git_show(root, ref, file, encoding)
         if text is None:
             raise FileNotFoundError(f"{scene} scene: {file} did not exist at {ref!r}")
         return text
-    path = (root / file).resolve()
     if not path.is_file():
         raise FileNotFoundError(f"{scene} scene points at a file that does not exist: {file}")
     return _decode(path.read_bytes(), file, encoding)
@@ -149,6 +162,9 @@ def extract(root: Path, file: str, first: int, last: int, ref: str | None = None
 
 def _git_show(root: Path, ref: str, file: str, encoding: str | None = None) -> str | None:
     """The file as it was at a git ref, or None if it did not exist there."""
+    # A ref is a commit, branch or tag name. Anything that git could take for an option is refused before git sees it.
+    if not isinstance(ref, str) or not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_./@^~{}-]*", ref) or ".." in ref:
+        raise ValueError(f"{ref!r} is not a git ref; give a commit, a branch or a tag, such as \"HEAD~1\" or \"v1.2\"")
     done = subprocess.run(["git", "-C", str(root), "show", f"{ref}:{file}"], capture_output=True)
     if done.returncode != 0:
         if b"exists on disk, but not in" in done.stderr or b"does not exist in" in done.stderr:
@@ -459,7 +475,16 @@ def _table_cells(line: str) -> list[str]:
             cur += c
         i += 1
     cells.append(cur)
-    return [clean(c) for c in cells]
+    return [_cell(c) for c in cells]
+
+
+def _cell(raw: str) -> str:
+    """One table cell as text. A star or dagger after the content is a footnote mark, not emphasis, and stays:
+    "12*" in a table means "12, but read the note"."""
+    mark = re.fullmatch(r"(\s*[^*\s][^*]*?)((?:\\?\*){1,3}|[†‡§])\s*", raw)
+    if mark:
+        return clean(mark.group(1)) + mark.group(2).replace("\\", "")
+    return clean(raw)
 
 
 def md_table(root: Path, file: str, first: int, last: int, ref: str | None = None,
@@ -495,8 +520,12 @@ def csv_table(root: Path, file: str, first: int, last: int, columns: list | None
     import csv
     import io
     text = _read(root, file, ref, "table", encoding)
-    table = [row for row in csv.reader(io.StringIO(text), delimiter="\t" if file.lower().endswith(".tsv") else ",")
-             if any(cell.strip() for cell in row)]
+    try:
+        table = [row for row in csv.reader(io.StringIO(text), delimiter="\t" if file.lower().endswith(".tsv") else ",")
+                 if any(cell.strip() for cell in row)]
+    except csv.Error as problem:                           # a NUL byte, one cell of a hundred thousand characters
+        raise ValueError(f"{file} could not be read as a table ({problem}); if it is not a "
+                         f"{'tab' if file.lower().endswith('.tsv') else 'comma'}-separated file, show its lines in a code scene") from None
     if not table:
         raise ValueError(f"{file} is empty")
     header, body = [c.strip() for c in table[0]], table[1:]

@@ -3,11 +3,14 @@ charts drawn from the source's numbers.
 
 Run from the repository root:  python -m unittest discover tests
 """
+import os
+import subprocess
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
-from idr import chart, diagrams, plan
+from idr import chart, diagrams, plan, source
 
 CSV = "size,hits,rate,note\n4,2565,12.8%,cold\n8,4401,22.0%,\n16,6644,33.2%,warm\n"
 
@@ -193,7 +196,7 @@ class Charts(unittest.TestCase):
         refused(self, self.scene(beats=[{"say": "It is {value}."}]), "highlights no cells", {"d.csv": CSV})
 
     def test_what_would_mislead_is_refused(self):
-        refused(self, self.scene(y="note"), "'cold' is not a number", {"d.csv": CSV})
+        refused(self, self.scene(y="note"), "'cold' is not a plain number", {"d.csv": CSV})
         refused(self, self.scene(y=["hits", "rate"]), "different units", {"d.csv": CSV})
         refused(self, self.scene(rows=[1, 2]), "mixes units", {"d.csv": "size,rate\n1,5%\n2,7 ms\n"})
         refused(self, self.scene(y="speed"), "the columns are size, hits, rate, note", {"d.csv": CSV})
@@ -218,6 +221,228 @@ class Charts(unittest.TestCase):
         scene, _ = build({"type": "chart", "heading": "h", "file": "r.md", "lines": [3, 6], "x": "size", "y": "rate",
                           "beats": [{"say": "one"}]}, {"r.md": table})
         self.assertEqual(scene.payload["series"][0]["values"], [12.8, 22.0])
+
+
+class WholeCells(unittest.TestCase):
+    """A chart draws a cell only when the whole of it is one number: the first digits of "1,25" or "1:45" are
+    another number."""
+
+    def test_what_is_not_one_plain_number_is_refused(self):
+        for cell in ["1,25", "0,5", "1.234,56", "0:45", "1'500", "1\\,500", "2^10", "12*", "1 234", "5 ms avg", "$5 USD", "12,34"]:
+            with self.assertRaises(ValueError, msg=cell):
+                chart.reading(cell)
+        with self.assertRaises(ValueError) as caught:
+            chart.reading("1,25")
+        self.assertIn("decimal comma", str(caught.exception))
+
+    def test_a_huge_power_of_ten_is_refused_at_once(self):
+        began = time.time()
+        for cell in ["1e999999999", "1e400", "9e99999"]:
+            with self.assertRaises(ValueError):
+                chart.reading(cell)
+        self.assertLess(time.time() - began, 1.0)
+        refused(self, {"type": "chart", "heading": "h", "file": "d.csv", "rows": [1, 2], "x": "n", "y": "v", "beats": [{"say": "one"}]},
+                "too large, too small or too close together", {"d.csv": "n,v\na,1e-320\nb,2e-320\n"})
+
+    def test_units_in_headers_count(self):
+        def scene(**fields):
+            return {"type": "chart", "heading": "h", "file": "d.csv", "rows": [1, 2], "x": "n", "beats": [{"say": "one"}], **fields}
+        data = {"d.csv": "n,time (ms),size (KB),p99 (ms),wait (ms),score (higher is better)\na,5,900,9,5 s,1\nb,7,300,12,6 s,2\n"}
+        refused(self, scene(y=["time (ms)", "size (KB)"]), "'time (ms)' in ms, 'size (KB)' in KB", data)
+        refused(self, scene(y="wait (ms)"), "says ms, and the cells under it are in s", data)
+        both, _ = build(scene(y=["time (ms)", "p99 (ms)"]), data)
+        self.assertEqual(both.payload["axis"]["title"], "ms")
+        self.assertEqual(chart.header_unit("score (higher is better)"), "")
+        self.assertEqual(chart.header_unit("rate [req/s]"), "req/s")
+
+    def test_a_footnote_mark_stays_on_its_cell(self):
+        self.assertEqual([source._cell(c) for c in [" 12* ", " *bold* ", "**x**", " a*b ", " 5† "]], ["12*", "bold", "x", "a*b", "5†"])
+        refused(self, {"type": "chart", "heading": "h", "file": "r.md", "lines": [1, 4], "x": "n", "y": "v", "beats": [{"say": "one"}]},
+                "'12*' is not a plain number", {"r.md": "| n | v |\n|---|---|\n| A | 12* |\n| B | 15 |\n"})
+
+
+class AlongX(unittest.TestCase):
+    """A line's rows are placed by their x values only when those are plain numbers; otherwise evenly."""
+
+    def x(self, column, **fields):
+        text = "x,v\n" + "".join(f"{label},{10 * (i + 1)}\n" for i, label in enumerate(column))
+        scene = {"type": "chart", "heading": "h", "file": "d.csv", "rows": [1, len(column)], "x": "x", "y": "v", "kind": "line",
+                 "beats": [{"say": "one"}], **fields}
+        return build(scene, {"d.csv": text})[0].payload["x"]
+
+    def test_dates_times_units_and_versions_are_names(self):
+        for column in (["2019-12-31", "2020-01-01", "2024-06-30"], ["9:00", "10:45", "13:15"], ["1 KB", "2 MB", "4 GB"],
+                       ["1.8", "1.9", "2.0", "2.10"], ["3", "1", "2"]):
+            got = self.x(column)
+            self.assertEqual((got["numeric"], got["at"], [t for _, t in got["ticks"]]), (False, list(range(len(column))), column))
+
+    def test_numbers_are_positions_and_every_mark_reads_differently(self):
+        years = self.x(["2019", "2020", "2021", "2022"])
+        self.assertEqual((years["numeric"], [t for _, t in years["ticks"]]), (True, ["2019", "2020", "2021", "2022"]))
+        sizes = self.x(["4 ms", "8 ms", "16 ms"])
+        self.assertEqual(sizes["at"], [4.0, 8.0, 16.0])
+        self.assertEqual(self.x(["2019", "2020", "2021"], spacing="even")["numeric"], False)
+        with self.assertRaises(plan.StoryboardError) as caught:
+            self.x(["1 KB", "2 MB", "4 GB"], spacing="numbers")
+        self.assertIn("different units", str(caught.exception))
+
+    def test_axis_marks_keep_the_digits_that_tell_them_apart(self):
+        scene, _ = build({"type": "chart", "heading": "h", "file": "d.csv", "rows": [1, 3], "x": "t", "y": "v", "kind": "line",
+                          "beats": [{"say": "one"}]}, {"d.csv": "t,v\n1,12345.1\n2,12345.5\n3,12345.9\n"})
+        marks = [text for _, text in scene.payload["axis"]["ticks"]]
+        self.assertEqual((marks[0], marks[-1], len(set(marks))), ("12345", "12346", len(marks)))
+        self.assertEqual((scene.payload["axis"]["min"], scene.payload["axis"]["max"]), (12345.0, 12346.0))
+
+
+class InOrder(unittest.TestCase):
+    """The player replays an array's steps in order of time, so they are timed in the order they were worked out."""
+
+    def ops(self, beat):
+        scene, _ = build({"type": "array", "heading": "h", "items": ["a", "b", "c"], "beats": [beat]})
+        return scene, scene.payload["ops"]
+
+    def test_pointers_wait_for_the_last_operation(self):
+        scene, ops = self.ops({"say": "Three things happen.", "do": [{"pop": "front"}, {"push": "d"}, {"push": "x", "at": "front"}],
+                               "pointers": {"i": {"value": "x"}}, "mark": {"value": "d"}})
+        self.assertEqual([op["op"] for op in ops], ["change", "change", "change", "mark", "pointers"])
+        self.assertGreater(ops[3]["t"], ops[2]["t"] + 0.6)
+        self.assertGreater(scene.duration, ops[4]["t"] + 1.0)                      # and they stay long enough to be seen
+
+    def test_a_cue_waits_for_what_is_still_moving(self):
+        _, ops = self.ops({"say": "First we push y and then z goes to the front.", "do": [{"pop": "front"}, {"push": "y"}],
+                           "cues": [{"at": "push y", "do": {"push": "z", "at": "front"}}]})
+        times = [op["t"] for op in ops]
+        self.assertEqual(times, sorted(times))
+        self.assertTrue(all(b - a >= 0.69 for a, b in zip(times, times[1:])))
+        self.assertEqual([len(op["row"]) for op in ops], [2, 3, 4])               # each step shows the row after it
+
+    def test_an_empty_do_is_refused(self):
+        refused(self, {"type": "array", "heading": "h", "items": ["a"], "beats": [{"say": "one", "do": []}]}, "it is empty")
+        refused(self, {"type": "array", "heading": "h", "items": "abc", "beats": [{"say": "one"}]}, '"items" is a list')
+
+
+class WhatIsFilmed(unittest.TestCase):
+    """Text and flags are checked for what they are, and a scene lasts until what it lists has been drawn."""
+
+    def diagram(self, **fields):
+        return {"type": "diagram", "heading": "h", "nodes": [{"label": "A"}, {"label": "B"}, {"label": "C"}],
+                "edges": [{"from": "A", "to": "B"}, {"from": "B", "to": "C"}], "beats": [{"say": "one"}], **fields}
+
+    def sequence(self, **fields):
+        return {"type": "sequence", "heading": "h", "actors": ["A", "B"], "messages": [{"from": "A", "to": "B", "label": "ask"}],
+                "beats": [{"say": "one"}], **fields}
+
+    def test_a_flag_is_true_or_false(self):
+        refused(self, self.diagram(edges=[{"from": "A", "to": "B", "dashed": "false"}]), '"dashed" on an edge is true or false')
+        refused(self, self.sequence(messages=[{"from": "A", "to": "B", "label": "x", "reply": "no"}]), '"reply" on a message is true or false')
+
+    def test_text_is_text(self):
+        refused(self, self.diagram(nodes=[{"label": ["A"]}, {"label": "B"}]), "a node's label is a piece of text")
+        refused(self, self.diagram(nodes=[{"label": "   "}, {"label": "B"}]), "a node's label is a piece of text")
+        refused(self, self.diagram(edges=[{"from": "A", "to": "B", "label": {"x": 1}}]), "the label of the edge")
+        refused(self, self.sequence(actors="AB"), '"actors" is a list')
+        refused(self, self.sequence(actors=["A", None]), "a party's name is a piece of text")
+        refused(self, self.sequence(messages=[{"from": "A", "to": "B", "label": [None]}]), "the label of message 1")
+
+    def test_what_the_beats_leave_out_is_said_and_still_drawn(self):
+        for spec, things in ((self.diagram(beats=[{"say": "one", "reveal": 1}]), "nodes"),
+                             (self.sequence(messages=[{"from": "A", "to": "B", "label": str(i)} for i in range(4)],
+                                            beats=[{"say": "one", "reveal": 1}]), "messages")):
+            scene, warnings = build(spec)
+            self.assertTrue(any(f"{things}, so the other" in w for w in warnings), warnings)
+            self.assertGreaterEqual(scene.duration, max(op["t"] for op in scene.payload["ops"]) + 0.85)
+
+    def test_a_hold_is_a_length_of_time(self):
+        refused(self, self.diagram(beats=[{"hold": -5}]), '"hold" is how many seconds')
+        refused(self, self.diagram(beats=[{"hold": "long"}]), '"hold" is how many seconds')
+
+
+class TheSourceFolder(unittest.TestCase):
+    def test_a_file_outside_it_is_not_the_source(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root, other = Path(tmp) / "src", Path(tmp) / "other"
+            root.mkdir(), other.mkdir()
+            (other / "o.csv").write_text(CSV), (root / "d.csv").write_text(CSV)
+            os.symlink(other / "o.csv", root / "link.csv")
+            for name in ("../other/o.csv", str(other / "o.csv"), "link.csv"):
+                with self.assertRaises(ValueError, msg=name) as caught:
+                    source.csv_table(root, name, 1, 2)
+                self.assertIn("outside the source folder", str(caught.exception))
+            self.assertEqual(source.csv_table(root, "d.csv", 1, 1)[1][0][0], "4")
+
+    def test_a_ref_is_never_an_option_to_git(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "d.csv").write_text(CSV)
+            for command in (["init", "-q"], ["add", "."], ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "one"]):
+                subprocess.run(["git", "-C", tmp, *command], check=True, capture_output=True)
+            self.assertEqual(source.csv_table(root, "d.csv", 1, 1, None, "HEAD")[1][0][0], "4")
+            for ref in ("--output=made.txt", "-p", "a b", "HEAD..x"):
+                with self.assertRaises(ValueError) as caught:
+                    source.csv_table(root, "d.csv", 1, 1, None, ref)
+                self.assertIn("is not a git ref", str(caught.exception))
+            self.assertEqual(sorted(p.name for p in root.iterdir() if p.name != ".git"), ["d.csv"])
+
+    def test_a_table_that_cannot_be_read_says_so(self):
+        refused(self, {"type": "chart", "heading": "h", "file": "d.csv", "rows": [1, 1], "x": "n", "y": "v", "beats": [{"say": "one"}]},
+                "could not be read as a table", {"d.csv": 'n,v\na,"' + "x" * 140000 + '"\n'})
+
+
+class LaidOut(unittest.TestCase):
+    """What only the browser can measure: an arrow behind a box, a label with no room, a label that would be cut."""
+
+    @classmethod
+    def setUpClass(cls):
+        try:
+            from idr.render import Studio
+            cls.studio = Studio("wide").__enter__()
+        except Exception as problem:                       # no browser on this machine
+            raise unittest.SkipTest(f"no browser to lay scenes out in ({type(problem).__name__})")
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.studio.__exit__(None, None, None)
+
+    def problems(self, scene):
+        built, _ = build(scene)
+        self.studio.problems.clear()
+        self.studio._load(built)
+        return list(self.studio.problems)
+
+    def chain(self, labels, **fields):
+        names = ["Tokenizer", "Parser", "TypeChecker", "Optimizer", "CodeGenerator", "Linker"][:len(labels) + 1]
+        return {"type": "diagram", "heading": "h", "nodes": [{"label": n} for n in names],
+                "edges": [{"from": a, "to": z, "label": text} for a, z, text in zip(names, names[1:], labels)],
+                "beats": [{"say": "one"}], **fields}
+
+    def test_a_label_that_would_hide_its_arrow_is_reported(self):
+        found = self.problems(self.chain(["token stream", "syntax tree", "typed tree", "optimised IR", "object files"]))
+        self.assertTrue(any("has no clear place" in text and not text.startswith("~") for text in found), found)
+        self.assertEqual(self.problems(self.chain(["tokens", "tree", "typed"])), [])
+
+    def test_there_and_back_between_two_boxes_have_a_label_each(self):
+        states = {"type": "diagram", "heading": "h", "nodes": [{"label": n} for n in ("idle", "busy", "done", "failed")],
+                  "edges": [{"from": "idle", "to": "busy", "label": "start"}, {"from": "busy", "to": "done", "label": "ok"},
+                            {"from": "busy", "to": "failed", "label": "error"}, {"from": "failed", "to": "busy", "label": "retry"},
+                            {"from": "busy", "to": "busy", "label": "tick"}],
+                  "beats": [{"say": "one"}]}
+        self.assertEqual(self.problems(states), [])
+        self.assertEqual(self.problems({**states, "direction": "down"}), [])
+
+    def test_an_arrow_that_skips_a_layer_goes_round_the_boxes(self):
+        fan = {"type": "diagram", "heading": "h", "nodes": [{"label": n} for n in ("router", "auth", "cache", "db", "reply", "config")],
+               "edges": [{"from": "router", "to": n} for n in ("auth", "cache", "db", "reply")] + [{"from": "auth", "to": "reply"}],
+               "beats": [{"say": "one"}]}
+        self.assertEqual(self.problems(fan), [])
+
+    def test_a_message_that_would_be_cut_is_reported(self):
+        def talk(label, a="Client", z="Worker"):
+            return {"type": "sequence", "heading": "h", "actors": ["Client", "Gateway", "Auth", "Cache", "Worker"],
+                    "messages": [{"from": a, "to": z, "label": label}], "beats": [{"say": "one"}]}
+        self.assertEqual(self.problems(talk("do not cache errors", "Worker", "Worker")), [])      # it loops left, where there is room
+        self.assertEqual(self.problems(talk("a label of twenty-six chars", "Client", "Worker")), [])
+        found = self.problems(talk("this label is far too long to sit between two neighbouring parties in two lines", "Client", "Gateway"))
+        self.assertTrue(any("would be cut off" in text for text in found), found)
 
 
 if __name__ == "__main__":

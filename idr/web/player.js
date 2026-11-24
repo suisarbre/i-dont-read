@@ -380,7 +380,8 @@
   };
 
   // A diagram with branches. plan.py has placed every node in a layer and a slot, and given every arrow its
-  // route through the layers; here those become pixels.
+  // route through the layers; here those become pixels. What only pixels can tell is checked here and
+  // reported: an arrow that would pass behind a box it does not belong to, a label with no clear place.
   builders.diagram = (root, scene) => {
     header(root, scene);
     const top = below(root, 40), W = G.W - 2 * G.padX, H = G.bottom - top;
@@ -389,8 +390,21 @@
     const L = scene.layers, A = scene.across;
     const along = Math.min(right ? 430 : 250, (right ? W : H) / L);
     const cross = Math.min(right ? 230 : 420, (right ? H : W) / A);
-    const nw = right ? Math.min(310, along * 0.62) : Math.min(340, cross - 96);
-    const nh = right ? Math.min(150, cross - 44) : Math.min(124, along * 0.56);
+    const name = i => scene.nodes[i].id;
+
+    // The labels are made first. Drawn rightwards, an arrow carries its label in the gap between two boxes, so
+    // the widest label decides how wide the boxes may be: a label must leave its arrow to be seen.
+    const tags = scene.edges.map(e => (e.label ? root.appendChild(el('div', 'elabel', e.label)) : null));
+    const size = tag => { const r = tag.getBoundingClientRect(); return [r.width, r.height]; };
+    let nw = right ? Math.min(310, along * 0.62) : Math.min(340, cross - 96);
+    let nh = right ? Math.min(150, cross - 44) : Math.min(124, along * 0.56);
+    if (right) {
+      const between = tags.filter((tag, k) => tag && scene.edges[k].route.length > 1);
+      const widest = () => Math.max(0, ...between.map(tag => size(tag)[0]));
+      for (let font = 20; font >= 17 && along - widest() - 64 < 170; font--) between.forEach(tag => { tag.style.fontSize = `${font}px`; });
+      if (between.length) nw = Math.max(Math.min(nw, along - widest() - 64), Math.min(nw, 150));
+      if (scene.edges.some(e => e.route.length < 2)) nh = Math.max(Math.min(nh, cross - 92), Math.min(nh, 70));   // room for a loop
+    }
     const midX = G.padX + W / 2, midY = top + H / 2;
     const centre = ([layer, slot]) => right
       ? [midX + (layer - (L - 1) / 2) * along, midY + slot * cross]
@@ -402,10 +416,15 @@
       box.style.cssText = `left:${px2(cx - nw / 2)}px; top:${px2(cy - nh / 2)}px; width:${px2(nw)}px; height:${px2(nh)}px;`;
       const ring = box.appendChild(el('div', 'ring'));
       const text = box.appendChild(el('div', 'text'));
-      const label = text.appendChild(el('div', 'label', nd.label));
+      text.appendChild(el('div', 'label', nd.label));
       if (nd.desc) text.appendChild(el('div', 'desc', nd.desc));
       shrinkTo(text, nw - 36, nh - 22, 15);
-      return { cx, cy, layer: nd.at[0], slot: nd.at[1], a: anim(box, { o: 0, s: 0.94 }), ring: fadeTrack(ring) };
+      if (text.scrollWidth > nw - 34 || text.offsetHeight > nh - 20) {
+        problem(`the text of the node "${nd.id}" does not fit its box even at the smallest size, so it runs over the edge; ` +
+          `shorten its label${nd.desc ? ' or its "desc"' : ''}`, true);
+      }
+      return { cx, cy, layer: nd.at[0], slot: nd.at[1], a: anim(box, { o: 0, s: 0.94 }), ring: fadeTrack(ring),
+        box: [cx - nw / 2, cy - nh / 2, cx + nw / 2, cy + nh / 2] };
     });
 
     // Where arrows leave and enter a box: spread along the side that faces the next point of their route, in
@@ -431,46 +450,133 @@
       list.forEach((p, i) => {
         const off = (i - (list.length - 1) / 2) * gap;
         ends[p.k][p.which] = right
-          ? { x: node.cx + (far ? nw / 2 : -nw / 2), y: node.cy + off, port: i, of: list.length }
-          : { x: node.cx + off, y: node.cy + (far ? nh / 2 : -nh / 2), port: i, of: list.length };
+          ? { x: node.cx + (far ? nw / 2 : -nw / 2), y: node.cy + off }
+          : { x: node.cx + off, y: node.cy + (far ? nh / 2 : -nh / 2) };
       });
     }
-    const bezier = (p, q) => right
-      ? [[p.x, p.y], [(p.x + q.x) / 2, p.y], [(p.x + q.x) / 2, q.y], [q.x, q.y]]
-      : [[p.x, p.y], [p.x, (p.y + q.y) / 2], [q.x, (p.y + q.y) / 2], [q.x, q.y]];
+    // An arrow leaves and arrives square to its boxes and turns at `f` of the way across the gap between them.
+    const bezier = (p, q, f = 0.5) => right
+      ? [[p.x, p.y], [p.x + (q.x - p.x) * f, p.y], [p.x + (q.x - p.x) * f, q.y], [q.x, q.y]]
+      : [[p.x, p.y], [p.x, p.y + (q.y - p.y) * f], [q.x, p.y + (q.y - p.y) * f], [q.x, q.y]];
+    // Two arrows between the same two boxes, there and back, would turn at the same place and run on top of
+    // each other. They turn at different places instead, the one on the inside of the bend first, so they
+    // never cross.
+    const turn = scene.edges.map((e, k) => {
+      const mate = e.route.length === 2 ? scene.edges.findIndex(o => o.route.length === 2 && o.from === e.to && o.to === e.from) : -1;
+      if (mate < 0) return 0.5;
+      const forward = e.route[1][0] > e.route[0][0];              // from the nearer layer to the farther one
+      const near = nodes[forward ? e.from : e.to], far = nodes[forward ? e.to : e.from];
+      const lean = Math.sign(right ? far.cy - near.cy : far.cx - near.cx);
+      if (!lean) return 0.5;
+      const port = j => { const end = ends[j][scene.edges[j].from === (forward ? e.from : e.to) ? 'start' : 'end']; return right ? end.y : end.x; };
+      const early = (port(k) > port(mate)) === (lean > 0);        // measured from the nearer box
+      return forward === early ? 0.3 : 0.7;
+    });
     const on = (c, t) => [0, 1].map(i => (1 - t) ** 3 * c[0][i] + 3 * (1 - t) ** 2 * t * c[1][i] + 3 * (1 - t) * t * t * c[2][i] + t ** 3 * c[3][i]);
+    const sample = (c, n = 18) => Array.from({ length: n + 1 }, (_, i) => on(c, i / n));
+    const curve = c => `C${c.slice(1).map(p => `${px2(p[0])} ${px2(p[1])}`).join(' ')}`;
     const HEAD = 15;
-    const edges = scene.edges.map((e, k) => {
-      const g = svgEl('g', { class: `edge${e.dashed ? ' dashed' : ''}` }, svg);
-      let d, tip, dir, at;
-      if (e.route.length < 2) {                         // an arrow from a box to itself: a loop on its outer side
-        const n = nodes[e.from];
+
+    // Every arrow's path, and points along it: to see what it passes, and to find its label a place.
+    const lines = scene.edges.map((e, k) => {
+      let d, tip, dir, pts;
+      if (e.route.length < 2) {                         // an arrow from a box to itself: a loop on a side with no neighbour
+        const n = nodes[e.from], mates = nodes.filter(o => o !== n && o.layer === n.layer);
+        const before = mates.some(o => o.slot < n.slot), after = mates.some(o => o.slot > n.slot);
+        let c;
         if (right) {
-          const y = n.cy - nh / 2;
-          d = `M${px2(n.cx - 34)} ${px2(y)} C${px2(n.cx - 70)} ${px2(y - 74)} ${px2(n.cx + 70)} ${px2(y - 74)} ${px2(n.cx + 34)} ${px2(y - 5)}`;
-          tip = [n.cx + 34, y]; dir = [-0.42, 0.9]; at = [n.cx, y - 62];
-        } else {                                          // on the side with no neighbour, if there is one
-          const mates = nodes.filter(o => o.layer === n.layer);
-          const side = mates.length > 1 && n.slot === Math.min(...mates.map(o => o.slot)) ? -1 : 1;
-          const x = n.cx + side * nw / 2;
-          d = `M${px2(x)} ${px2(n.cy - 26)} C${px2(x + side * 84)} ${px2(n.cy - 60)} ${px2(x + side * 84)} ${px2(n.cy + 60)} ${px2(x + side * 5)} ${px2(n.cy + 26)}`;
-          tip = [x, n.cy + 26]; dir = [-0.9 * side, -0.42]; at = [x + side * 52, n.cy - 56];
+          const side = !before ? -1 : !after ? 1 : -1, reach = Math.min(74, cross - nh - 16), y = n.cy + side * nh / 2;
+          c = [[n.cx - 34, y], [n.cx - 70, y + side * reach], [n.cx + 70, y + side * reach], [n.cx + 34, y + side * 5]];
+          tip = [n.cx + 34, y]; dir = [-0.42, -side * 0.9];
+        } else {
+          const side = !after ? 1 : !before ? -1 : 1, reach = Math.min(84, cross - nw - 14), x = n.cx + side * nw / 2;
+          c = [[x, n.cy - 26], [x + side * reach, n.cy - 60], [x + side * reach, n.cy + 60], [x + side * 5, n.cy + 26]];
+          tip = [x, n.cy + 26]; dir = [-0.9 * side, -0.42];
         }
+        d = `M${px2(c[0][0])} ${px2(c[0][1])} ${curve(c)}`;
+        pts = sample(c, 24);
       } else {
-        const stops = [ends[k].start, ...e.route.slice(1, -1).map(p => { const [x, y] = centre(p); return { x, y }; }), ends[k].end];
-        const last = stops[stops.length - 1], before = stops[stops.length - 2];
-        const sign = Math.sign((right ? last.x - before.x : last.y - before.y) || 1);
+        // Across a layer it only passes, an arrow runs straight through the empty place kept for it there, from
+        // one side of that column to the other: so it bends only in the gaps, where there are no boxes.
+        const s = e.route[e.route.length - 1][0] > e.route[0][0] ? 1 : -1;
+        const stops = [ends[k].start];
+        for (const point of e.route.slice(1, -1)) {
+          const [x, y] = centre(point), half = (right ? nw : nh) / 2 + 10;
+          stops.push(right ? { x: x - s * half, y, straight: true } : { x, y: y - s * half, straight: true });
+          stops.push(right ? { x: x + s * half, y } : { x, y: y + s * half });
+        }
+        stops.push(ends[k].end);
+        const last = stops[stops.length - 1], prev = stops[stops.length - 2];
+        const sign = Math.sign((right ? last.x - prev.x : last.y - prev.y) || 1);
         dir = right ? [sign, 0] : [0, sign];
         tip = [last.x, last.y];
         stops[stops.length - 1] = { x: last.x - dir[0] * (HEAD - 3), y: last.y - dir[1] * (HEAD - 3) };   // the line ends inside the head
-        const curves = stops.slice(1).map((q, i) => bezier(stops[i], q));
-        d = `M${px2(stops[0].x)} ${px2(stops[0].y)} ` + curves.map(c => `C${c.slice(1).map(p => `${px2(p[0])} ${px2(p[1])}`).join(' ')}`).join(' ');
-        // The label sits on the arrow, in the gap after the box it leaves; side-by-side arrows stagger theirs.
-        // Where several arrows share a side, each label also steps off its line, away from the others.
-        const port = ends[k].start, shared = port.of > 1;
-        at = on(curves[0], shared ? (port.port % 2 ? 0.62 : 0.38) : 0.5);
-        at.push(shared ? (port.port < port.of / 2 ? -1 : 1) : 0);
+        d = `M${px2(stops[0].x)} ${px2(stops[0].y)}`;
+        pts = [];
+        stops.slice(1).forEach((q, i) => {
+          const p = stops[i];
+          if (p.straight) {
+            d += ` L${px2(q.x)} ${px2(q.y)}`;
+            for (let j = 1; j <= 8; j++) pts.push([p.x + (q.x - p.x) * j / 8, p.y + (q.y - p.y) * j / 8]);
+          } else {
+            const c = bezier(p, q, turn[k]);
+            d += ` ${curve(c)}`;
+            pts.push(...sample(c));
+          }
+        });
       }
+      const behind = nodes.findIndex((n, i) => i !== e.from && i !== e.to &&
+        pts.some(([x, y]) => x > n.box[0] + 3 && x < n.box[2] - 3 && y > n.box[1] + 3 && y < n.box[3] - 3));
+      if (behind >= 0) {
+        problem(`the arrow from "${name(e.from)}" to "${name(e.to)}" would pass behind "${name(behind)}" and look joined to it; ` +
+          'list the nodes in another order, or show the diagram in two scenes');
+      }
+      return { d, tip, dir, pts };
+    });
+
+    // A label sits on its own arrow where that covers nothing else: no box, no other label, no other arrow,
+    // and not so much of its own arrow that the arrow is lost. Failing that it goes just beside the arrow.
+    const taken = [];
+    const hit = (r, q, m = 0) => r[0] < q[2] + m && r[2] > q[0] - m && r[1] < q[3] + m && r[3] > q[1] - m;
+    const holds = (r, [x, y], m = 0) => x > r[0] - m && x < r[2] + m && y > r[1] - m && y < r[3] + m;
+    const spots = scene.edges.map((e, k) => {
+      const tag = tags[k], g = lines[k];
+      if (!tag) return null;
+      const [w, h] = size(tag);
+      let length = 0;
+      for (let i = 1; i < g.pts.length; i++) length += Math.hypot(g.pts[i][0] - g.pts[i - 1][0], g.pts[i][1] - g.pts[i - 1][1]);
+      let best = null;
+      const tryAt = (cx, cy, beside) => {
+        const r = [cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2];
+        let cost = beside ? 2 : 0;
+        if (r[0] < 8 || r[2] > G.W - 8 || r[1] < top - 24 || r[3] > G.bottom) cost += 100;
+        if (nodes.some(n => hit(r, n.box, 4))) cost += 100;
+        if (taken.some(q => hit(r, q, 5))) cost += 100;
+        if (lines.some((o, j) => j !== k && (o.pts.some(pt => holds(r, pt, beside ? 9 : 3)) || holds(r, o.tip, 9)))) cost += 50;
+        const seen = g.pts.filter(pt => !holds(r, pt, 2)).length / g.pts.length * length;
+        if (seen < 40 || holds(r, g.tip, 10)) cost += 60;       // it would hide its own arrow, or the arrow's head
+        if (!best || cost < best.cost) best = { cost, r };
+      };
+      const along_ = [0.5, 0.4, 0.6, 0.3, 0.7, 0.22, 0.78].map(f => g.pts[Math.round(f * (g.pts.length - 1))]);
+      for (const [x, y] of along_) if (!best || best.cost > 0) tryAt(x, y, false);
+      if (best.cost > 0) {
+        for (const [x, y] of along_) {
+          for (const side of [-1, 1]) { tryAt(x, y + side * (h / 2 + 8), true); tryAt(x + side * (w / 2 + 10), y, true); }
+        }
+      }
+      if (best.cost >= 50) {
+        problem(`the label "${e.label}" on the arrow from "${name(e.from)}" to "${name(e.to)}" has no clear place: wherever it goes it ` +
+          'covers a box, another label, another arrow or its own. Shorten it or leave it out' +
+          (right && e.route.length > 1 ? ', or draw the diagram with "direction": "down", where labels have more room' : ''));
+      }
+      taken.push(best.r);
+      tag.style.left = `${px2(best.r[0])}px`;
+      tag.style.top = `${px2(best.r[1])}px`;
+      return tag;
+    });
+
+    const edges = scene.edges.map((e, k) => {
+      const g = svgEl('g', { class: `edge${e.dashed ? ' dashed' : ''}` }, svg), { d, tip, dir } = lines[k];
       const head = `M${px2(tip[0])} ${px2(tip[1])} L${px2(tip[0] - dir[0] * HEAD - dir[1] * HEAD * 0.5)} ${px2(tip[1] - dir[1] * HEAD + dir[0] * HEAD * 0.5)} ` +
         `L${px2(tip[0] - dir[0] * HEAD + dir[1] * HEAD * 0.5)} ${px2(tip[1] - dir[1] * HEAD - dir[0] * HEAD * 0.5)} Z`;
       svgEl('path', { class: 'line', d }, g);
@@ -478,14 +584,7 @@
       const lit = svgEl('g', { class: 'lit' }, g);       // the same arrow in the accent colour, for when a beat walks it
       svgEl('path', { class: 'line', d }, lit);
       svgEl('path', { class: 'head', d: head }, lit);
-      let tag = null;
-      if (e.label) {
-        tag = root.appendChild(el('div', 'elabel', e.label));
-        const r = tag.getBoundingClientRect(), off = at[2] || 0;
-        const x = at[0] - r.width / 2 + (right ? 0 : off * (r.width / 2 + 8));
-        tag.style.left = `${px2(Math.min(Math.max(x, 8), G.W - r.width - 8))}px`;
-        tag.style.top = `${px2(at[1] - r.height / 2 + (right ? off * (r.height / 2 + 5) : 0))}px`;
-      }
+      const tag = spots[k];
       return { o: fadeTrack(g), lit: fadeTrack(lit), tag: tag ? fadeTrack(tag) : null, tagNode: tag };
     });
     const hot = edges.map(e => e.tagNode ? switcher(false, v => e.tagNode.classList.toggle('lit', v)) : null);
@@ -620,6 +719,7 @@
       const box = root.appendChild(el('div', 'actor', name));
       box.style.cssText = `left:${px2(xOf(i) - bw / 2)}px; top:${px2(top)}px; width:${px2(bw)}px; height:${bh}px;`;
       shrink(box, 16);
+      if (box.scrollWidth > box.clientWidth + 1) problem(`the name "${name}" does not fit above its line even at the smallest size and is cut off; shorten it`);
       enter(box, 0.25 + i * 0.06, 14, 0.45);
       const line = svgEl('line', { class: 'life', x1: px2(xOf(i)), x2: px2(xOf(i)), y1: px2(top + bh), y2: px2(foot) }, svg);
       fadeTrack(line).to(0.3 + i * 0.06, 1, 0.5);
@@ -628,20 +728,31 @@
     const rows = scene.messages.map((msg, k) => {
       const y = yOf(k), a = xOf(msg.from), z = xOf(msg.to), self = msg.from === msg.to;
       const g = svgEl('g', { class: `msg${msg.reply ? ' reply' : ''}` }, svg);
-      const dir = self ? -1 : Math.sign(z - a);
+      // A message to oneself loops out to the right. On the last party the frame ends there, so it loops left.
+      const out = self && n > 1 && msg.from === n - 1 ? -1 : 1;
+      const dir = self ? -out : Math.sign(z - a);
       const d = self
-        ? `M${px2(a)} ${px2(y - 16)} H${px2(a + 62)} V${px2(y + 12)} H${px2(a + HEAD)}`
+        ? `M${px2(a)} ${px2(y - 16)} H${px2(a + out * 62)} V${px2(y + 12)} H${px2(a + out * HEAD)}`
         : `M${px2(a)} ${px2(y)} H${px2(z - dir * (HEAD - 2))}`;
       const tipX = self ? a : z, tipY = self ? y + 12 : y;
       const head = `M${px2(tipX)} ${px2(tipY)} L${px2(tipX - dir * HEAD)} ${px2(tipY - HEAD * 0.5)} L${px2(tipX - dir * HEAD)} ${px2(tipY + HEAD * 0.5)} Z`;
       const line = svgEl('path', { class: 'line', d, ...(msg.reply ? {} : { pathLength: 1 }) }, g);   // a reply is dashed, so it fades in
       const tip = svgEl('path', { class: 'head', d: head }, g);
       const tag = root.appendChild(el('div', 'mlabel', msg.label));
-      const room = self ? G.W - G.padX - a - 80 : Math.abs(z - a) - 30;
-      tag.style.maxWidth = `${px2(Math.max(room, 80))}px`;
-      if (self) tag.style.textAlign = 'left';
+      const room = Math.max(self ? (out > 0 ? G.W - G.padX - a : a - G.padX) - 80 : Math.abs(z - a) - 30, 80);
+      tag.style.maxWidth = `${px2(room)}px`;
+      if (self) tag.style.textAlign = out > 0 ? 'left' : 'right';
+      // A label that does not fit in two lines is set smaller; one that still does not fit would be cut, and a
+      // cut label can say the opposite of the whole one, so the check stops there.
+      let font = parseFloat(getComputedStyle(tag).fontSize);
+      const cut = () => tag.scrollHeight > tag.clientHeight + 1 || tag.scrollWidth > tag.clientWidth + 1;
+      while (font > 18 && cut()) { font -= 1; tag.style.fontSize = `${font}px`; }
+      if (cut()) {
+        problem(`message ${k + 1}, "${tag.textContent}", does not fit ${self ? 'beside its party' : 'between its two parties'} and would be cut off; ` +
+          `shorten it to about ${Math.max(8, Math.floor(room / (font * 0.52) * 1.8))} characters` + (self ? '' : ', or put the two parties further apart'));
+      }
       const r = tag.getBoundingClientRect();
-      tag.style.left = `${px2(self ? a + 74 : (a + z) / 2 - r.width / 2)}px`;
+      tag.style.left = `${px2(self ? (out > 0 ? a + 74 : a - 74 - r.width) : (a + z) / 2 - r.width / 2)}px`;
       tag.style.top = `${px2(self ? y - r.height / 2 - 2 : y - r.height - 7)}px`;
       const lit = switcher(false, v => { g.classList.toggle('lit', v); tag.classList.toggle('lit', v); });
       return {
@@ -779,8 +890,11 @@
       s.values.forEach((v, r) => { if (v === null) { if (runs[runs.length - 1].length) runs.push([]); } else runs[runs.length - 1].push(`${px2(xOf(xs.at[r]))} ${px2(yOf(v))}`); });
       const d = runs.filter(run => run.length).map(run => `M${run.join(' L')}`).join(' ');
       const path = svgEl('path', { class: `curve c${i + 1}`, d, pathLength: 1 }, svg);
-      const dots = s.values.length <= 24 ? s.values.map((v, r) => v === null ? null
-        : svgEl('circle', { class: `pt c${i + 1}`, cx: px2(xOf(xs.at[r])), cy: px2(yOf(v)), r: 5 }, svg)) : [];
+      // With few rows every value gets a dot. With many, only a value with an empty cell on both sides does:
+      // no line reaches it, so without a dot it would not be drawn at all.
+      const alone = r => (r === 0 || s.values[r - 1] === null) && (r === s.values.length - 1 || s.values[r + 1] === null);
+      const dots = s.values.map((v, r) => v === null || (s.values.length > 24 && !alone(r)) ? null
+        : svgEl('circle', { class: `pt c${i + 1}`, cx: px2(xOf(xs.at[r])), cy: px2(yOf(v)), r: 5 }, svg));
       const group = dots.filter(Boolean).map(dot => fadeTrack(dot));
       return { draw: track(0, v => { path.style.strokeDasharray = `${v.toFixed(4)} 1`; path.style.opacity = v > 0 ? '1' : '0'; }), dots: group };
     });

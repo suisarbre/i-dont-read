@@ -256,7 +256,11 @@ class _Clock:
             self._captions(text, start, clip, exact)
             self.t = start + clip.duration + GAP
         else:
-            self.t = start + float(beat.get("hold", HOLD))
+            hold = beat.get("hold", HOLD)
+            if isinstance(hold, bool) or not isinstance(hold, (int, float)) or not 0 <= hold <= 60:
+                raise StoryboardError(f'{self.where}: "hold" is how many seconds a beat with no sentence lasts, '
+                                      f"a number from 0 to 60; not {hold!r}")
+            self.t = start + float(hold)
 
         def at(phrase: str) -> float:
             if not text:

@@ -26,10 +26,11 @@ on each other, a loop. (For a straight chain of 2 to 6 steps, `flow` is simpler 
       "follow": [["cached", "load"], ["fresh", "load"]], "focus": "load" } ] }
 ```
 
-- **Fields.** `nodes`: 2 to 10, each `{ "id", "label", "desc" }` (`id` is what edges and beats call it; left out, it is the label). `edges`: each `{ "from", "to", "label", "dashed" }`, by node id; an edge from a node to itself draws a loop. `direction`: `"right"` (the default in a wide frame) or `"down"` (the default in a tall one).
-- **What a beat can do.** `reveal`: how many nodes, in the order listed, are visible from now on; an arrow appears once both its ends are there. `focus`: a node id, or a list, gets the ring. `follow`: an edge written `["from", "to"]`, or a list of them, is drawn in the accent colour: a path being walked. `focus` and `follow` last for their sentence.
-- **You do not place anything.** The engine puts the nodes in layers so that arrows point forward, sends an arrow that closes a loop back around, and sorts each layer so arrows cross as little as possible. List the nodes in the order you will reveal them; that order also breaks ties.
-- **Limits the check enforces.** An edge or a beat that names a node that does not exist, two nodes with one id, an edge listed twice, and a `follow` along an arrow that was never drawn are errors. So is a diagram too long or too wide for the frame: a wide frame drawn rightwards holds 6 layers of up to 4 nodes, a tall frame drawn downwards 7 layers of up to 3; the message says when the other direction would fit. Keep node labels under 20 characters and edge labels to a word or two.
+- **Fields.** `nodes`: 2 to 10, each `{ "id", "label", "desc" }` (`id` is what edges and beats call it; left out, it is the label). `edges`: each `{ "from", "to", "label", "dashed" }`, by node id (`"dashed": true` draws a broken line); an edge from a node to itself draws a loop on a side of the box with no neighbour. `direction`: `"right"` (the default in a wide frame) or `"down"` (the default in a tall one).
+- **What a beat can do.** `reveal`: how many nodes, in the order listed, are visible from now on; an arrow appears once both its ends are there. Reveal every node you list: what the beats leave out appears as the scene ends, with no sentence about it, and the check warns. `focus`: a node id, or a list, gets the ring. `follow`: an edge written `["from", "to"]`, or a list of them, is drawn in the accent colour: a path being walked. `focus` and `follow` last for their sentence.
+- **You do not place anything.** The engine puts the nodes in layers so that arrows point forward, draws an arrow that closes a loop pointing back, takes an arrow that skips a layer round the boxes of that layer, and sorts each layer so arrows cross as little as possible. Two arrows between the same two boxes, there and back, are drawn apart, each with its own label. List the nodes in the order you will reveal them; that order also breaks ties.
+- **Limits the check enforces.** An edge or a beat that names a node that does not exist, two nodes with one id, an edge listed twice, and a `follow` along an arrow that was never drawn are errors. So is a diagram too long or too wide for the frame: a wide frame drawn rightwards holds 6 layers of up to 4 nodes, a tall frame drawn downwards 7 layers of up to 3; the message says when the other direction would fit. Keep node labels under 20 characters (14 when 5 or 6 layers are drawn rightwards).
+- **The check measures the picture.** It lays the diagram out with the real fonts and stops when a label has no clear place (on or beside its own arrow, covering no box, no other label and no other arrow, and leaving its arrow to be seen), or when an arrow would pass behind a box it does not belong to. Drawn rightwards, a label has to fit in the gap between two boxes: with 5 or 6 layers that is one short word. For longer labels use `"direction": "down"`, fewer layers, or leave the label out and say it in the narration.
 
 ## 2. A row of cells that changes: `array`
 
@@ -58,8 +59,8 @@ a sort, a cache deciding what to drop, a queue filling and draining.
 | `{ "swap": [0, 3] }` | exchanges two cells |
 | `{ "set": 1, "to": "z" }` | replaces what a cell holds |
 
-- **`mark`**: a place, or a list of places, is ringed: the cells being compared. **`pointers`**: up to 3 names under cells, as in `{ "i": 0, "j": 3 }`. Both are about the row as it stands, so an operation or a new sentence clears them.
-- **The engine carries the operations out.** What the row holds after each one is worked out, never typed, so the picture cannot disagree with itself. A pop from an empty row, an index past the end, a value that no cell or more than one cell holds, and a row over its capacity are errors that show the row at that point.
+- **`mark`**: a place, or a list of places, is ringed: the cells being compared. **`pointers`**: up to 3 names under cells, as in `{ "i": 0, "j": 3 }`. Both are about the row as it stands, so an operation or a new sentence clears them. Given in the same beat as a `do`, they are placed once its operations have finished, on the row as it then is.
+- **The engine carries the operations out**, one after another: an operation in a cue waits for those still moving. What the row holds after each one is worked out, never typed, so the picture cannot disagree with itself. A pop from an empty row, an index past the end, a value that no cell or more than one cell holds, and a row over its capacity are errors that show the row at that point.
 - **Limits.** 12 cells at once in a wide frame, 7 in a tall one; a cell holds up to 14 characters. Write narration that says what the operation does, and let the picture show the result.
 
 ## 3. Messages over time: `sequence`
@@ -79,9 +80,10 @@ services, a cache standing between a caller and a slow loader.
              { "say": "It keeps the value.", "reveal": 4, "focus": 4 } ] }
 ```
 
-- **Fields.** `actors`: 2 to 5 names (4 in a tall frame), left to right. `messages`: top to bottom, each `{ "from", "to", "label" }` by actor name; `"reply": true` draws it dashed; a message from an actor to itself is a step it takes alone.
-- **What a beat can do.** `reveal`: how many messages are visible from now on. `focus`: which message (1-based) is drawn in the accent colour.
-- **Limits.** 9 messages in a wide frame, 14 in a tall one; a message that names someone who is not an actor is an error. A label wraps to two lines and no more, so keep it short.
+- **Fields.** `actors`: 2 to 5 names (4 in a tall frame), left to right. `messages`: top to bottom, each `{ "from", "to", "label" }` by actor name; `"reply": true` draws it dashed; a message from an actor to itself is a step it takes alone, drawn as a loop beside its line.
+- **What a beat can do.** `reveal`: how many messages are visible from now on (reveal them all: the check warns about any the beats leave out). `focus`: which message (1-based) is drawn in the accent colour, for its sentence.
+- **Limits.** 9 messages in a wide frame, 14 in a tall one; a message that names someone who is not an actor is an error.
+- **The check measures the labels.** A label has two lines between its two parties (or beside its party, for a message to itself). One that does not fit is set smaller; one that still would be cut stops the check, which says about how many characters fit. A name that does not fit above its line is an error too.
 
 ## 4. A chart of the source's numbers: `chart`
 
@@ -95,12 +97,13 @@ that is too long to read as a table, a measurement over time.
 ```
 
 - **The numbers come from a file, and only from a file.** `file` with `rows: [first, last]` for a `.csv` or `.tsv` (data rows, after the header), or with `lines: [first, last]` around a Markdown table or a LaTeX `tabular`. `expect` and `ref` work as in a `table` scene. There is no way to type a value in. If the source gives its numbers only in prose, show them in a `table` or `stats` scene, written out and credited; if it already has a chart as a picture, show that with `image`.
-- **Fields.** `x`: the column of names or positions. `y`: the column of numbers, or a list of columns (2 for bars, 3 for lines). `kind`: `"bar"` (the default) or `"line"`.
+- **Fields.** `x`: the column of names or positions. `y`: the column of numbers, or a list of columns (2 for bars, 3 for lines). `kind`: `"bar"` (the default) or `"line"`. `encoding` works as in a `table` scene.
+- **What counts as a number.** The whole cell must be one number: digits, a decimal point, commas only between groups of three (`1,250`), a sign, a power of ten (`3e2`), and one unit or currency sign at most (`12.5 ms`, `97.5%`, `$40`). `1,25`, `1:45`, `1 500`, `12*`, `2^10` and `$1.5 \times 10^3$` are refused, with the row named: a bar drawn from the first digits of such a cell would show another number. Leave that row out of `rows`, or show the column in a `table`. A unit may also stand in the header, in brackets (`time (ms)`); the header and the cells must agree.
 - **Bars** lie on their sides, one row of the file each, in the file's order, at most 12. Each bar carries its number exactly as the file writes it.
-- **Lines** take up to 400 rows. When the `x` column is numbers in rising order they are spaced as numbers; otherwise (names, dates) the rows are spaced evenly in the file's order.
+- **Lines** take up to 400 rows. When every cell of the `x` column is a plain number in one unit, in rising order, the rows are placed by those numbers; otherwise (names, dates, times, versions such as 2.10 after 2.9, sizes in mixed units) they are spread evenly in the file's order and labelled as the file writes them. `"spacing": "even"` asks for even spacing; `"spacing": "numbers"` makes it an error when the column cannot be placed by number. A line's y axis starts at zero only when the values come near zero; otherwise it starts just below the smallest, so say in the narration how large the difference is and do not let the slope say it.
 - **What a beat can do.** `reveal`: how many of the `y` columns are drawn from now on. `highlight`: `{ "x": "4" }` (the row whose `x` cell is that text) or `{ "row": 3 }`, with `"series": "column name"` when there are several; a list highlights several. On bars the rest dim; on a line the point gets a dot and its number. It lasts for its sentence.
 - **Quote, do not retype.** In `say`, `{value}` stands for the highlighted cell as the file writes it and `{x}` for its row's name; when a sentence highlights several, give each `"as": "name"` and write `{name.value}`.
-- **What the check refuses.** A cell that is not a number (it is named; leave the row out, or show the column in a table), a column that mixes units, two columns in different units on one axis, more rows than fit. Bars are measured from zero, always: there is no setting to cut the axis.
+- **What the check refuses.** A cell that is not a number (it is named; leave the row out, or show the column in a table), a column that mixes units, a header and its cells in different units, two columns in different units on one axis (whether the units are in the cells or in the headers), numbers too large or too close together to mark on an axis, more rows than fit. Bars are measured from zero, always: there is no setting to cut the axis.
 
 ## 5. Staying truthful with these
 
