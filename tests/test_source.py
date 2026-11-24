@@ -105,8 +105,60 @@ class Speech(unittest.TestCase):
             self.assertEqual(speech.spoken(written), said)
 
     def test_ordinary_words_are_left_alone(self):
-        for text in ["a month of width and depth", "the 4-th item", "Seth and Beth", "o-th", "length-th", "don'th"]:
+        for text in ["a month of width and depth", "Seth and Beth", "o-th", "length-th", "don'th"]:
             self.assertEqual(speech.spoken(text), text)
+
+    def test_notation_is_read_aloud(self):
+        cases = {"a - b is small": "eigh minus b is small",                  # the voice dropped the minus
+                 "the n-1 case": "the n minus 1 case",
+                 "x \u2208 \u211d": "x in the real numbers",                 # both signs were silent
+                 "x \u2192 0": "x goes to 0",
+                 "f'(x) is positive": "f prime of x is positive",
+                 "f(x) = x^2 + 1": "f of x = x squared + 1",
+                 "so x\u00b2 wins": "so x squared wins",
+                 "|x| < 1": "the absolute value of x is less than 1",
+                 "10^-3": "10 to the minus 3", "e^x": "e to the x", "x_i": "x sub i",
+                 "the slope is 1/2": "the slope is one half", "1/x": "1 over x", "dy/dx": "dee why by dx",
+                 "\u2202f/\u2202x": "partial f by partial x", "n!": "n factorial", "0 < x < 1": "0 is less than x is less than 1",
+                 "Here |x| < 1. Then x - 1.5 is negative.": "Here the absolute value of x is less than 1. Then x minus 1.5 is negative.",
+                 "2\u03c0r": "2 \u03c0 r", "sin(x)": "sine of x", "sin x plus cos x": "sine x plus cos x",
+                 "sqrt(2x)": "the square root of 2x", "the 0-th term": "the 0th term", "1e-6": "10 to the minus 6"}
+        for written, said in cases.items():
+            self.assertEqual(speech.spoken(written), said)
+
+    def test_names_and_terms(self):
+        cases = {"Cauchy's theorem": "koh-shee's theorem", "Poincar\u00e9": "poo-ahn-kah-ray", "an eigenvalue": "an eye-gun-value",
+                 "sinh and tanh": "sinch and tanch", "xi": "\u03be", "QED": "Q E D", "w.r.t. x": "with respect to x",
+                 "the Lagrangian": "the luh-grahn-jee-un", "dy over dx": "dee why over dx"}
+        for written, said in cases.items():
+            self.assertEqual(speech.spoken(written), said)
+
+    def test_the_letter_a_is_not_the_article(self):
+        cases = {"Around a point a, the first term copies the height.": "Around a point eigh, the first term copies the height.",
+                 "x minus a to the n": "x minus eigh to the n", "a plus b": "eigh plus b", "f of a": "f of eigh",
+                 "A is a matrix": "eigh is a matrix", "a squared plus b squared": "eigh squared plus b squared"}
+        for written, said in cases.items():
+            self.assertEqual(speech.spoken(written), said)
+        for text in ["Add a squared term", "a prime number", "a plus sign", "It runs a for loop", "a to-do list", "what a day",
+                     "a by-product", "a times table", "half a second"]:
+            self.assertEqual(speech.spoken(text), text)
+
+    def test_prose_and_code_are_left_alone(self):
+        for text in ["the x-y plane", "a - well - b", "the 'a' key", "it's y'all", "wow!", "I/O", "24/7", "m/s", "Vec<T>",
+                     "It calls parse_args() first.", "see src/main.py", "x = 2", "x \u2264 1", "e.g. this"]:
+            self.assertEqual(speech.spoken(text), text)
+
+    def test_what_still_cannot_be_said_is_warned_about(self):
+        self.assertIsNone(speech.trouble("so x^2 is less than x when |x| < 1, and a - b \u2208 \u211d"))
+        self.assertIsNone(speech.trouble("x = 2"))
+        self.assertIn("cannot read \u2016", speech.trouble("\u2016x\u2016 is the norm"))
+        for text in ["It calls parse_args() first.", "see src/main.py", "x^(n+1)", "Vec<T>", "x=2"]:
+            self.assertIn("code-like", speech.trouble(text), msg=text)
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "a.py").write_text("def f():\n    return 1\n", encoding="utf-8")
+            board = {"title": "t", "chapters": [chapter(CODE, {**FLOW, "beats": [{"say": "Here \u2016x\u2016 is the norm."}]})]}
+            _, warnings = plan.build(board, Path(tmp), "light", plan.DryNarrator())
+        self.assertTrue(any("the voice cannot read" in w for w in warnings))
 
     def test_the_storyboard_can_name_its_own(self):
         table = {"PyPI": "pie pee eye", "PyPI JSON": "pie pee eye jason"}

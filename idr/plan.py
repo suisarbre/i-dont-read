@@ -36,7 +36,6 @@ MAX_TABLE_ROWS = 8
 MAX_CURVES = 3
 MAX_CELL_CHARS = 40
 
-_CODE_LIKE = re.compile(r"[_\\<>{}\[\]=$^]|\w/\w|\w\(\)|\.(py|js|ts|json|md|cpp|hpp|h|rs|go|java|html|css|sh)\b")
 _NOT_ACTIONS = {"say", "speak", "hold", "cues", "at"}
 EXAMPLE_SUB = "Example written for this video"
 
@@ -185,9 +184,11 @@ class _Clock:
         if text:
             if len(text) > MAX_SAY_CHARS:
                 self.b.warn(self.where, f"a sentence is {len(text)} characters; split it into two beats")
-            if exact and _CODE_LIKE.search(text):
-                self.b.warn(self.where, f"narration has code-like text ({text[:44]!r}...); "
-                                        'add "speak" with how it should be said aloud')
+            problem = speech.trouble(beat.get("speak") or text, self.b.pronounce)
+            if problem:                                 # after notation has been turned into words (speech.py)
+                self.b.warn(self.where, f"in the sentence {text[:44]!r}..., {problem}; "
+                            + ('write "speak" in plain words' if beat.get("speak") else
+                               'add "speak" with how it should be said aloud'))
             clip = self.b.narrator.say(speech.spoken(beat.get("speak") or text, self.b.pronounce))
             self.scene.narration.append((start, clip.samples))
             self._captions(text, start, clip, exact)
