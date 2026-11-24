@@ -46,6 +46,7 @@ class Scene:
     narration: list[tuple[float, np.ndarray]] = field(default_factory=list)  # (time in scene, samples)
     sfx: list[tuple[float, str]] = field(default_factory=list)               # (time in scene, effect)
     chapter: str | None = None                      # set on the scene that opens a chapter
+    stops: list[float] = field(default_factory=list)   # when something changes on screen (beats and cues)
 
     @property
     def frames(self) -> int:
@@ -103,6 +104,7 @@ class _Builder:
             raise StoryboardError(f"format must be one of {', '.join(FORMATS)}, not {fmt!r}")
         self.root, self.theme, self.narrator, self.captions, self.fmt = root, theme, narrator, captions, fmt
         self.warnings: list[str] = []
+        self.noted: set[str] = set()
 
     def warn(self, where: str, message: str) -> None:
         self.warnings.append(f"{where}: {message}")
@@ -176,6 +178,7 @@ class _Clock:
             if not cue.get("at"):
                 raise StoryboardError(f'{self.where}: every cue needs "at": a word or phrase from the sentence')
             actions.append((at(cue["at"]), {k: v for k, v in cue.items() if k != "at"}, cue))
+        self.scene.stops.extend(t for t, _, _ in actions)
         return sorted(actions, key=lambda a: a[0])
 
     def finish(self, minimum: float = 0.0) -> None:
@@ -264,7 +267,9 @@ def _lines(b: _Builder, scene: Scene, spec: dict, where: str, index: dict[int, i
 
 def _check_rows(b: _Builder, rows: list[dict], where: str) -> None:
     if len(rows) > MAX_CODE_LINES:
-        raise StoryboardError(f"{where} is {len(rows)} lines; show at most {MAX_CODE_LINES} per scene "
+        gone = sum(1 for row in rows if row["kind"] == "-")
+        detail = f" on screen ({len(rows) - gone} from the new file plus {gone} removed)" if gone else ""
+        raise StoryboardError(f"{where} is {len(rows)} lines{detail}; show at most {MAX_CODE_LINES} per scene "
                               "(split it into two scenes)")
     widest = max(row["len"] for row in rows)
     limit = MAX_CODE_COLS - (6 if any(row["kind"] for row in rows) else 0)   # a diff spends columns on its gutter
@@ -288,7 +293,7 @@ def _expect(spec: dict, rows: list[dict], where: str) -> None:
 def _where(spec: dict, first: int, last: int) -> str:
     """The line under a heading that says exactly what is on screen: file, lines, and the git ref if not the current file."""
     at = f"  ·  as of {spec['ref']}" if spec.get("ref") else ""
-    return f"{spec['file']}  ·  lines {first}–{last}{at}"
+    return f"{spec['file']}  ·  {f'line {first}' if first == last else f'lines {first}–{last}'}{at}"
 
 
 def _code(b: _Builder, spec: dict, kicker: str) -> Scene:
@@ -319,6 +324,9 @@ def _diff(b: _Builder, spec: dict, kicker: str) -> Scene:
 def _quote(b: _Builder, spec: dict, kicker: str) -> Scene:
     first, last = spec["lines"]
     where = f"{spec['file']}:{first}-{last}"
+    if spec["file"].lower().endswith((".html", ".htm")):
+        raise StoryboardError(f'{where}: a quote scene shows a text file as it is written, so a web page would show its '
+                              'markup; use an image scene with "url" set to this file, and "find" for the words')
     paragraphs = source.excerpt(b.root, spec["file"], first, last, spec.get("ref"), spec.get("encoding"))
     size = sum(len(p) for p in paragraphs)
     if size > MAX_QUOTE_CHARS:
@@ -393,6 +401,10 @@ def _reveals(b: _Builder, scene: Scene, spec: dict, where: str, count: int, key:
                 scene.payload["ops"].append({"op": "focus", "t": round(t + 0.05, 3), "node": target})
                 focused = target
     stage.upto(count, clock.t)                         # never end with hidden items
+    first = min((op["t"] for op in scene.payload["ops"] if op["op"] == "reveal"), default=0.0)
+    if first > LEAD + 1.0:
+        b.warn(where, f"nothing is on screen for the first {first:.1f} seconds; reveal the first item when the "
+                      'first sentence starts (drop its "at", or put the later reveals in "cues")')
     clock.finish()
 
 
@@ -466,12 +478,20 @@ def _image(b: _Builder, spec: dict, kicker: str) -> Scene:
     regions = [act[key] for act in _actions(spec) for key in ("zoom", "box") if act.get(key)]
     finds = sorted({r["find"] for r in regions if isinstance(r, dict)})
     pic = picture.resolve(b.root, spec, finds)
+    for note in pic.get("notes", []):
+        if note not in b.noted:                    # one page shown in several scenes: say it once
+            b.noted.add(note)
+            b.warn(where, note)
 
     def rects(value) -> list[list[float]]:
         """A region as boxes: one per line for text found on the page, one for coordinates."""
         if isinstance(value, dict):
             hit = pic["found"].get(value["find"])
             if hit is None:
+                why = pic.get("why", {}).get(value["find"])
+                if why in ("below", "above"):
+                    raise StoryboardError(f"{where}: the text {value['find']!r} is on the page but {why} the part that was "
+                                          'captured; start the capture near it with "top": "words where that part starts"')
                 raise StoryboardError(f"{where}: the text {value['find']!r} is not on the page; "
                                       "it must be copied exactly from what is shown")
             pad = 0.006 if len(hit) == 1 else 0.003     # a little air around the words
@@ -491,24 +511,72 @@ def _image(b: _Builder, spec: dict, kicker: str) -> Scene:
         x1, y1 = max(b[0] + b[2] for b in boxes), max(b[1] + b[3] for b in boxes)
         return [round(v, 5) for v in (x0, y0, x1 - x0, y1 - y0)]
 
+    def framing(value) -> list[float]:
+        """What the camera should hold for a zoom: the words, and on a web page the whole width of the
+        paragraph they sit in, so a close-up never cuts a line of text in half."""
+        x, y, w, h = around(rects(value))
+        block = pic.get("blocks", {}).get(value["find"]) if isinstance(value, dict) else None
+        if block:
+            left, right = min(x, block[0]), max(x + w, min(1.0, block[0] + block[1]))
+            x, w = left, right - left
+        return [round(v, 5) for v in (x, y, w, h)]
+
+    # What the camera shows, as the player frames it (see builders.image in player.js), to catch a box
+    # drawn where nobody is looking. The frame's shape is approximate: the header's height is measured there.
+    shape = (1.2 if b.fmt == "tall" else 0.4)          # frame height / width
+    span = pic["ih"] / pic["iw"]                        # picture height in units of its width
+    shape = min(shape, span)
+
+    def view(region) -> list[float]:
+        """[x, y, width, height] of the picture in frame, as fractions of the picture."""
+        if not region:
+            return [0.0, 0.0, 1.0, shape / span]
+        x, y, w, h = region
+        frame_px = 952 if b.fmt == "tall" else 1712
+        cap = max(1.0, min(2.5, h * span * 1.08 / shape))
+        width = min(cap, max(1 / 3, frame_px / 1.6 / pic["iw"], w * 1.3, h * span * 1.3 / shape))
+        left = (1 - width) / 2 if width >= 1 else min(max(0.0, x + w / 2 - width / 2), 1 - width)
+        tall = width * shape / span
+        return [left, min(max(0.0, y + h / 2 - tall / 2), max(0.0, 1 - tall)), width, tall]
+
+    def share_in_view(box: list[float], cam: list[float]) -> float:
+        ox = max(0.0, min(box[0] + box[2], cam[0] + cam[2]) - max(box[0], cam[0]))
+        oy = max(0.0, min(box[1] + box[3], cam[1] + cam[3]) - max(box[1], cam[1]))
+        return ox * oy / max(box[2] * box[3], 1e-9)
+
+    camera = view(None)
+    views: list[list[float]] = []                       # every framing this scene uses
     boxes: list[list[list[float]]] = []
     scene = b.scene("image", kicker, {**spec, "sub": spec.get("sub") or pic["label"]},
                     src=pic["path"].as_uri(), iw=pic["iw"], ih=pic["ih"], stamp=pic["stamp"], boxes=boxes)
     ops = scene.payload["ops"]
     scene.sfx.append((0.0, "whoosh"))
     clock = _Clock(b, scene, where)
-    for beat in spec.get("beats", []):
-        for t, act, _ in clock.beat(beat):
+    for n, beat in enumerate(spec.get("beats", [])):
+        for t, act, src in clock.beat(beat):
+            if n == 0 and src is beat and "zoom" not in act:
+                views.append(camera)                    # the scene opens on the top of the picture
             if "zoom" in act:
-                ops.append({"op": "cam", "t": t, "region": around(rects(act["zoom"])) if act["zoom"] else None})
+                ops.append({"op": "cam", "t": t, "region": framing(act["zoom"]) if act["zoom"] else None})
                 scene.sfx.append((t, "zoom"))
+                camera = view(ops[-1]["region"])
+                views.append(camera)
             if "box" in act:
                 if act["box"]:
                     boxes.append(rects(act["box"]))
+                    if share_in_view(around(boxes[-1]), camera) < 0.6:
+                        name = act["box"]["find"] if isinstance(act["box"], dict) else act["box"]
+                        b.warn(where, f"the box on {name!r} is outside what the camera shows at that moment; "
+                                      'add "zoom" to the same region on that beat')
                     ops.append({"op": "box", "t": round(t + (0.5 if "zoom" in act else 0.0), 3), "id": len(boxes) - 1})
                     scene.sfx.append((ops[-1]["t"], "tick"))
                 else:
                     ops.append({"op": "box", "t": t, "id": -1})
+    seen = [thing for thing in pic.get("avoid", []) if any(share_in_view(thing["rect"], cam) > 0.15 for cam in views)]
+    for what in sorted({thing["what"] for thing in seen}):
+        count = sum(1 for thing in seen if thing["what"] == what)
+        fix = next(thing["fix"] for thing in seen if thing["what"] == what)
+        b.warn(where, f"in frame during this scene: {what}{f', {count} times' if count > 1 else ''}; {fix}")
     clock.finish()
     return scene
 
@@ -536,6 +604,7 @@ def build(storyboard: dict, root: Path, theme: str, narrator, captions: bool = T
     """All scenes of the video in order, plus warnings about things that may not read well."""
     b = _Builder(root, theme, narrator, captions, fmt)
     scenes: list[Scene] = []
+    problems: list[str] = []
     if not storyboard.get("chapters"):
         raise StoryboardError("the storyboard has no chapters")
     intro = storyboard.get("intro")
@@ -562,5 +631,9 @@ def build(storyboard: dict, root: Path, theme: str, narrator, captions: bool = T
             try:
                 scenes.append(make(b, spec, kicker))
             except KeyError as missing:
-                raise StoryboardError(f"chapter {n}, {spec['type']} scene: missing field {missing}") from None
+                problems.append(f"chapter {n}, {spec['type']} scene: missing field {missing}")
+            except (ValueError, FileNotFoundError) as problem:      # report every scene's problem in one run
+                problems.append(str(problem))
+    if problems:
+        raise StoryboardError("\nerror: ".join(problems))
     return scenes, b.warnings

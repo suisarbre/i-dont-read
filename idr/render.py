@@ -56,11 +56,12 @@ class Studio:
         self._browser.close()
         self._pw.stop()
 
-    def still(self, scene: Scene, t: float, path: Path) -> None:
-        """Draw one frame to a PNG, for checking a layout before filming."""
+    def stills(self, scene: Scene, shots: list[tuple[float, Path]]) -> None:
+        """Draw frames of one scene to PNGs, for checking a layout before filming."""
         self._load(scene)
-        self.page.evaluate("t => window.idr.seek(t)", t)
-        self.page.screenshot(path=str(path))
+        for t, path in shots:
+            self.page.evaluate("t => window.idr.seek(t)", t)
+            self.page.screenshot(path=str(path))
 
     def film(self, scene: Scene, dest: Path) -> dict:
         """Encode one scene to dest. Frames that did not change are not re-captured."""
