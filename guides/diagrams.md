@@ -1,0 +1,109 @@
+# Diagrams, rows of cells, sequences and charts
+
+Part of the instructions in `SKILL.md`. Read this before you write a `diagram`, `array`, `sequence` or `chart`
+scene. Everything in `SKILL.md` still applies; this file adds what those four scenes take and what they refuse.
+
+The first three are your explanation of the source, like a `flow` or `compare` scene: use them beside the code
+or text they explain, not in place of it. A `chart` is different: it is drawn from a file of the source, and
+counts as showing the source.
+
+`examples/cache/storyboard.json` uses all four.
+
+## 1. A diagram with branches: `diagram`
+
+Use it when the parts do not form one line: a state machine, a decision with two outcomes, modules that depend
+on each other, a loop. (For a straight chain of 2 to 6 steps, `flow` is simpler and larger on screen.)
+
+```json
+{ "type": "diagram", "heading": "Hit or miss",
+  "nodes": [ { "id": "cached", "label": "In the row?" }, { "id": "fresh", "label": "Still fresh?" },
+             { "id": "hit", "label": "Hit", "desc": "move to the back" }, { "id": "load", "label": "Miss" } ],
+  "edges": [ { "from": "cached", "to": "fresh", "label": "yes" }, { "from": "cached", "to": "load", "label": "no" },
+             { "from": "fresh", "to": "hit", "label": "yes" }, { "from": "fresh", "to": "load", "label": "expired" } ],
+  "beats": [
+    { "say": "A lookup first asks whether the key is there.", "reveal": 1, "focus": "cached" },
+    { "say": "A missing key and an expired one end the same way.", "reveal": 4,
+      "follow": [["cached", "load"], ["fresh", "load"]], "focus": "load" } ] }
+```
+
+- **Fields.** `nodes`: 2 to 10, each `{ "id", "label", "desc" }` (`id` is what edges and beats call it; left out, it is the label). `edges`: each `{ "from", "to", "label", "dashed" }`, by node id; an edge from a node to itself draws a loop. `direction`: `"right"` (the default in a wide frame) or `"down"` (the default in a tall one).
+- **What a beat can do.** `reveal`: how many nodes, in the order listed, are visible from now on; an arrow appears once both its ends are there. `focus`: a node id, or a list, gets the ring. `follow`: an edge written `["from", "to"]`, or a list of them, is drawn in the accent colour: a path being walked. `focus` and `follow` last for their sentence.
+- **You do not place anything.** The engine puts the nodes in layers so that arrows point forward, sends an arrow that closes a loop back around, and sorts each layer so arrows cross as little as possible. List the nodes in the order you will reveal them; that order also breaks ties.
+- **Limits the check enforces.** An edge or a beat that names a node that does not exist, two nodes with one id, an edge listed twice, and a `follow` along an arrow that was never drawn are errors. So is a diagram too long or too wide for the frame: a wide frame drawn rightwards holds 6 layers of up to 4 nodes, a tall frame drawn downwards 7 layers of up to 3; the message says when the other direction would fit. Keep node labels under 20 characters and edge labels to a word or two.
+
+## 2. A row of cells that changes: `array`
+
+Use it to show what a list, queue, stack or ordered map holds, and how one operation after another changes it:
+a sort, a cache deciding what to drop, a queue filling and draining.
+
+```json
+{ "type": "array", "heading": "Least recently used at the front",
+  "items": ["a", "b", "c"], "capacity": 4, "ends": { "front": "least recent", "back": "most recent" },
+  "beats": [
+    { "say": "A lookup of b is a hit, so b moves to the back.", "mark": { "value": "b" },
+      "cues": [ { "at": "moves to the back", "do": { "move": { "value": "b" }, "to": "back" } } ] },
+    { "say": "One more miss makes five entries, one too many.", "do": [ { "pop": "front" }, { "push": "e" } ] } ] }
+```
+
+- **Fields.** `items`: the cells at the start, as short texts or numbers. `capacity`: how many the row can hold, drawn as empty slots; an operation that would overfill it is an error. `ends`: words over the `front` and `back` ends. `index: false` hides the indices under the cells.
+- **A place in the row** is an index from 0, `"front"`, `"back"`, or `{ "value": "b" }` for the one cell that holds that text.
+- **`do`** takes one operation, or a list carried out in order:
+
+| Operation | Does |
+|---|---|
+| `{ "push": "d" }` | adds a cell at the back (`"at": "front"` for the front) |
+| `{ "insert": "x", "at": 2 }` | adds a cell at that index |
+| `{ "pop": "front" }`, `{ "remove": { "value": "b" } }` | takes the cell at that place out |
+| `{ "move": 1, "to": "back" }` | takes the cell at a place and puts it at another |
+| `{ "swap": [0, 3] }` | exchanges two cells |
+| `{ "set": 1, "to": "z" }` | replaces what a cell holds |
+
+- **`mark`**: a place, or a list of places, is ringed: the cells being compared. **`pointers`**: up to 3 names under cells, as in `{ "i": 0, "j": 3 }`. Both are about the row as it stands, so an operation or a new sentence clears them.
+- **The engine carries the operations out.** What the row holds after each one is worked out, never typed, so the picture cannot disagree with itself. A pop from an empty row, an index past the end, a value that no cell or more than one cell holds, and a row over its capacity are errors that show the row at that point.
+- **Limits.** 12 cells at once in a wide frame, 7 in a tall one; a cell holds up to 14 characters. Write narration that says what the operation does, and let the picture show the result.
+
+## 3. Messages over time: `sequence`
+
+Use it when the point is who says what to whom, in what order: a protocol handshake, a request passing through
+services, a cache standing between a caller and a slow loader.
+
+```json
+{ "type": "sequence", "heading": "Two calls for the same key",
+  "actors": ["Caller", "TTLCache", "Loader"],
+  "messages": [
+    { "from": "Caller", "to": "TTLCache", "label": "get_or_load(key, load)" },
+    { "from": "TTLCache", "to": "Loader", "label": "load()" },
+    { "from": "Loader", "to": "TTLCache", "label": "value", "reply": true },
+    { "from": "TTLCache", "to": "TTLCache", "label": "store, then evict" } ],
+  "beats": [ { "say": "The first call is a miss, so the cache calls the loader.", "reveal": 2 },
+             { "say": "It keeps the value.", "reveal": 4, "focus": 4 } ] }
+```
+
+- **Fields.** `actors`: 2 to 5 names (4 in a tall frame), left to right. `messages`: top to bottom, each `{ "from", "to", "label" }` by actor name; `"reply": true` draws it dashed; a message from an actor to itself is a step it takes alone.
+- **What a beat can do.** `reveal`: how many messages are visible from now on. `focus`: which message (1-based) is drawn in the accent colour.
+- **Limits.** 9 messages in a wide frame, 14 in a tall one; a message that names someone who is not an actor is an error. A label wraps to two lines and no more, so keep it short.
+
+## 4. A chart of the source's numbers: `chart`
+
+Use it when the source holds a column of numbers and their shape is the point: a benchmark, a results table
+that is too long to read as a table, a measurement over time.
+
+```json
+{ "type": "chart", "heading": "Hit rate by size", "file": "hit_rates.csv", "rows": [1, 8], "expect": "maxsize",
+  "x": "maxsize", "y": "hit rate",
+  "beats": [ { "say": "With room for only 4 entries, {value} of the lookups are hits.", "highlight": { "x": "4" } } ] }
+```
+
+- **The numbers come from a file, and only from a file.** `file` with `rows: [first, last]` for a `.csv` or `.tsv` (data rows, after the header), or with `lines: [first, last]` around a Markdown table or a LaTeX `tabular`. `expect` and `ref` work as in a `table` scene. There is no way to type a value in. If the source gives its numbers only in prose, show them in a `table` or `stats` scene, written out and credited; if it already has a chart as a picture, show that with `image`.
+- **Fields.** `x`: the column of names or positions. `y`: the column of numbers, or a list of columns (2 for bars, 3 for lines). `kind`: `"bar"` (the default) or `"line"`.
+- **Bars** lie on their sides, one row of the file each, in the file's order, at most 12. Each bar carries its number exactly as the file writes it.
+- **Lines** take up to 400 rows. When the `x` column is numbers in rising order they are spaced as numbers; otherwise (names, dates) the rows are spaced evenly in the file's order.
+- **What a beat can do.** `reveal`: how many of the `y` columns are drawn from now on. `highlight`: `{ "x": "4" }` (the row whose `x` cell is that text) or `{ "row": 3 }`, with `"series": "column name"` when there are several; a list highlights several. On bars the rest dim; on a line the point gets a dot and its number. It lasts for its sentence.
+- **Quote, do not retype.** In `say`, `{value}` stands for the highlighted cell as the file writes it and `{x}` for its row's name; when a sentence highlights several, give each `"as": "name"` and write `{name.value}`.
+- **What the check refuses.** A cell that is not a number (it is named; leave the row out, or show the column in a table), a column that mixes units, two columns in different units on one axis, more rows than fit. Bars are measured from zero, always: there is no setting to cut the axis.
+
+## 5. Staying truthful with these
+
+- A `diagram`, `array` or `sequence` is your reading of the source, so every node, operation and message must be something the source does. Show the code or the text it comes from in a scene beside it, and do not add a step to make the picture tidier.
+- In a video with a source, a `diagram`, `array` or `sequence` about something the source does not say is marked `"beyond": true`, like any other scene (SKILL.md section 7).
+- A `chart` shows the file and cannot be `beyond`. Say in the narration what was measured and how, as far as the source says; a chart with no account of where its numbers come from proves nothing.

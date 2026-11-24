@@ -1,0 +1,132 @@
+{
+  "title": "A cache that forgets",
+  "intro": { "say": "A small cache, explained with four kinds of picture: a row of cells, a diagram with branches, a sequence of messages, and a chart of measured numbers." },
+  "pronounce": { "get_or_load": "get or load", "maxsize": "max size" },
+  "chapters": [
+    {
+      "title": "The row of entries",
+      "say": "Everything the cache knows sits in one ordered row.",
+      "scenes": [
+        {
+          "type": "code",
+          "heading": "One lookup",
+          "file": "ttl_cache.py",
+          "lines": [19, 32],
+          "expect": "def get_or_load",
+          "beats": [
+            { "say": "Every lookup goes through get_or_load.", "highlight": 19 },
+            { "say": "A hit moves the entry to the back of the row.", "highlight": [23, 26], "note": "to the back" },
+            { "say": "A miss loads the value, stores it at the back, and then evicts.", "highlight": [27, 31] }
+          ]
+        },
+        {
+          "type": "array",
+          "heading": "Least recently used at the front",
+          "items": ["a", "b", "c"],
+          "capacity": 4,
+          "ends": { "front": "least recent", "back": "most recent" },
+          "beats": [
+            { "say": "Say the cache holds three keys and has room for four." },
+            { "say": "A lookup of b is a hit, so b moves to the back.", "mark": { "value": "b" },
+              "cues": [ { "at": "moves to the back", "do": { "move": { "value": "b" }, "to": "back" } } ] },
+            { "say": "A lookup of d is a miss: d is loaded and stored at the back.", "at": "stored", "do": { "push": "d" } },
+            { "say": "One more miss, for e, makes five entries, one too many.", "at": "makes five",
+              "do": [ { "pop": "front" }, { "push": "e" } ] },
+            { "say": "So the front entry went first: a, the one used longest ago.", "pointers": { "next out": "front" } }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "What a lookup decides",
+      "say": "Two questions decide whether the loader runs.",
+      "scenes": [
+        {
+          "type": "diagram",
+          "heading": "Hit or miss",
+          "nodes": [
+            { "id": "lookup", "label": "get_or_load" },
+            { "id": "cached", "label": "In the row?" },
+            { "id": "fresh", "label": "Still fresh?" },
+            { "id": "hit", "label": "Hit", "desc": "move to the back" },
+            { "id": "load", "label": "Miss", "desc": "run the loader" },
+            { "id": "store", "label": "Store", "desc": "at the back" },
+            { "id": "evict", "label": "Evict" }
+          ],
+          "edges": [
+            { "from": "lookup", "to": "cached" },
+            { "from": "cached", "to": "fresh", "label": "yes" },
+            { "from": "cached", "to": "load", "label": "no" },
+            { "from": "fresh", "to": "hit", "label": "yes" },
+            { "from": "fresh", "to": "load", "label": "expired" },
+            { "from": "load", "to": "store" },
+            { "from": "store", "to": "evict" }
+          ],
+          "beats": [
+            { "say": "A lookup first asks whether the key is in the row at all.", "reveal": 2, "focus": "cached" },
+            { "say": "If it is, the next question is whether it is still fresh.", "reveal": 3, "follow": ["cached", "fresh"], "focus": "fresh" },
+            { "say": "Only a fresh entry is a hit.", "reveal": 4, "follow": ["fresh", "hit"], "focus": "hit" },
+            { "say": "A missing key and an expired one end up in the same place: the loader runs.", "reveal": 5,
+              "follow": [["cached", "load"], ["fresh", "load"]], "focus": "load" },
+            { "say": "Then the new value is stored, and eviction makes room.", "reveal": 7, "follow": [["load", "store"], ["store", "evict"]] }
+          ]
+        },
+        {
+          "type": "sequence",
+          "heading": "Two calls for the same key",
+          "actors": ["Caller", "TTLCache", "Loader"],
+          "messages": [
+            { "from": "Caller", "to": "TTLCache", "label": "get_or_load(key, load)" },
+            { "from": "TTLCache", "to": "Loader", "label": "load()" },
+            { "from": "Loader", "to": "TTLCache", "label": "value", "reply": true },
+            { "from": "TTLCache", "to": "TTLCache", "label": "store, then evict" },
+            { "from": "TTLCache", "to": "Caller", "label": "value", "reply": true },
+            { "from": "Caller", "to": "TTLCache", "label": "get_or_load(key, load)" },
+            { "from": "TTLCache", "to": "Caller", "label": "value", "reply": true }
+          ],
+          "beats": [
+            { "say": "The first call for a key is a miss, so the cache calls the loader and waits.", "reveal": 1,
+              "cues": [ { "at": "calls the loader", "reveal": 3 } ] },
+            { "say": "It keeps the value, and hands it back.", "reveal": 5, "focus": 4 },
+            { "say": "The second call never reaches the loader.", "reveal": 7, "focus": 6 }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Does a bigger row help?",
+      "say": "The file comes with a measurement.",
+      "scenes": [
+        {
+          "type": "chart",
+          "heading": "Hit rate by size",
+          "file": "hit_rates.csv",
+          "rows": [1, 8],
+          "expect": "maxsize",
+          "x": "maxsize",
+          "y": "hit rate",
+          "beats": [
+            { "say": "Twenty thousand lookups over five hundred keys, at eight sizes." },
+            { "say": "With room for only 4 entries, {value} of the lookups are hits.", "highlight": { "x": "4" } },
+            { "say": "Each doubling adds about the same amount. At 512 the row holds every key, and the rate is {value}.",
+              "cues": [ { "at": "At 512", "highlight": { "x": "512" } } ] }
+          ]
+        },
+        {
+          "type": "chart",
+          "heading": "Hits and misses",
+          "file": "hit_rates.csv",
+          "rows": [1, 8],
+          "x": "maxsize",
+          "y": ["hits", "misses"],
+          "kind": "line",
+          "beats": [
+            { "say": "As a line, hits climb as the row grows.", "reveal": 1 },
+            { "say": "And misses fall by the same amount, crossing between 32 and 64.", "reveal": 2,
+              "cues": [ { "at": "crossing", "highlight": [ { "x": "64", "series": "hits", "as": "h" }, { "x": "64", "series": "misses" } ] } ] }
+          ]
+        }
+      ]
+    }
+  ]
+}

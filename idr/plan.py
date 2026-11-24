@@ -42,7 +42,9 @@ _NOT_ACTIONS = {"say", "speak", "hold", "cues", "at"}
 BEAT_ACTIONS = {"code": {"highlight", "note"}, "diff": {"highlight", "note", "show"}, "quote": {"mark"},
                 "image": {"zoom", "box"}, "flow": {"reveal", "focus"}, "compare": {"reveal"}, "stats": {"reveal"},
                 "steps": {"reveal"}, "math": {"reveal", "mark", "note"}, "table": {"reveal", "highlight", "note"},
-                "plot": {"reveal", "point", "tangent", "secant", "shade", "riemann", "arrow", "move", "stage", "sweep"}}
+                "plot": {"reveal", "point", "tangent", "secant", "shade", "riemann", "arrow", "move", "stage", "sweep"},
+                "diagram": {"reveal", "focus", "follow"}, "array": {"do", "mark", "pointers"},
+                "sequence": {"reveal", "focus"}, "chart": {"reveal", "highlight"}}
 
 
 def _only(given, allowed, what: str, where: str) -> None:
@@ -1761,8 +1763,18 @@ def _plot(b: _Builder, spec: dict, kicker: str) -> Scene:
     return scene
 
 
+def _from(module: str, name: str):
+    """A scene that lives in a module of its own. That module builds on this one, so it is loaded when first used."""
+    def make(b: _Builder, spec: dict, kicker: str) -> Scene:
+        import importlib
+        return getattr(importlib.import_module(f"{__package__}.{module}"), name)(b, spec, kicker)
+    return make
+
+
 SCENES = {"code": _code, "diff": _diff, "quote": _quote, "image": _image, "flow": _flow, "compare": _compare,
-          "stats": _stats, "steps": _steps, "math": _math, "table": _table, "plot": _plot}
+          "stats": _stats, "steps": _steps, "math": _math, "table": _table, "plot": _plot,
+          "diagram": _from("diagrams", "_diagram"), "array": _from("diagrams", "_array"),
+          "sequence": _from("diagrams", "_sequence"), "chart": _from("chart", "_chart")}
 OVERVIEW_FROM = 3   # videos with this many chapters open with a card that lists them
 NO_SOURCE = "No source document  ·  explained from general knowledge"   # on the opening card of such a video
 
@@ -1772,7 +1784,7 @@ def _shows_source(spec: dict) -> bool:
     kind = spec.get("type")
     if kind == "code":
         return not spec.get("example")
-    return kind in ("diff", "quote", "image") or (kind in ("math", "table") and bool(spec.get("file")))
+    return kind in ("diff", "quote", "image", "chart") or (kind in ("math", "table") and bool(spec.get("file")))
 
 
 def _basis(storyboard: dict) -> bool:
@@ -1790,7 +1802,7 @@ def _basis(storyboard: dict) -> bool:
                               'remove "source": "none", and mark the scenes that go past the source with "beyond": true')
     instructions = all(spec.get("type") == "steps" for spec in specs)      # a help video: nothing is being explained
     if declared is None and not shown and specs and not instructions:
-        raise StoryboardError('no scene shows a source (code, diff, quote, image, or math or table read from a file). '
+        raise StoryboardError('no scene shows a source (code, diff, quote, image, chart, or math or table read from a file). '
                               'Show the source; or, if the user gave none and this is your own explanation, put '
                               '"source": "none" at the top of the storyboard so the video says so')
     return declared == "none"

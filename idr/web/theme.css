@@ -101,6 +101,76 @@ body { font-family: "IDR Sans", sans-serif; -webkit-font-smoothing: antialiased;
   font-variant-ligatures: none; font-feature-settings: "liga" 0, "calt" 0; }  /* show the source as typed: no => or != ligatures */
 .scene.code .ln { display: flex; white-space: pre; position: relative; }
 .scene.code .ln .no { flex: none; text-align: right; color: var(--mute); opacity: 0.75; user-select: none; }
+/* Diagram, array, sequence, chart: boxes and labels are HTML, lines are drawn on one SVG the size of the frame. */
+.scene svg.ink { position: absolute; left: 0; top: 0; overflow: visible; pointer-events: none; }
+
+.scene.diagram .node { position: absolute; background: var(--panel); border: 2px solid var(--line); border-radius: 20px;
+  display: flex; align-items: center; justify-content: center; text-align: center; padding: 10px 16px; }
+.scene.diagram .node .ring { position: absolute; inset: -2px; border: 4px solid var(--accent); border-radius: 20px; opacity: 0; }
+.scene.diagram .node .text { font-size: 30px; }
+.scene.diagram .node .label { font-family: "IDR Serif", serif; font-weight: 500; line-height: 1.12; }
+.scene.diagram .node .desc { font-size: 0.66em; line-height: 1.25; color: var(--mute); margin-top: 6px; }
+.scene.diagram .edge { opacity: 0; }
+.scene.diagram .edge .line { fill: none; stroke: var(--mute); stroke-width: 3; stroke-linecap: round; }
+.scene.diagram .edge.dashed .line { stroke-dasharray: 9 9; }
+.scene.diagram .edge .head { fill: var(--mute); stroke: var(--mute); stroke-width: 2; stroke-linejoin: round; }
+.scene.diagram .edge .lit { opacity: 0; }
+.scene.diagram .edge .lit .line { stroke: var(--accent); stroke-width: 5; }
+.scene.diagram .edge .lit .head { fill: var(--accent); stroke: var(--accent); }
+.scene.diagram .elabel { position: absolute; opacity: 0; background: var(--bg); color: var(--mute); font-size: 21px; font-weight: 500;
+  line-height: 1.2; padding: 2px 9px; border-radius: 9px; white-space: nowrap; }
+.scene.diagram .elabel.lit { color: var(--accent); }
+
+.scene.array .cell { position: absolute; background: var(--panel); border: 2px solid var(--line); border-radius: 16px;
+  display: flex; align-items: center; justify-content: center; font-family: "IDR Mono", monospace; font-weight: 500; }
+.scene.array .cell .ring { position: absolute; inset: -2px; border: 4px solid var(--accent); border-radius: 16px; background: var(--accent-soft); opacity: 0; }
+.scene.array .cell .text { position: relative; white-space: nowrap; }
+.scene.array .slot { position: absolute; border: 2px dashed var(--line); border-radius: 16px; }
+.scene.array .index { position: absolute; opacity: 0; text-align: center; font-family: "IDR Mono", monospace; font-size: 22px; color: var(--mute); }
+.scene.array .end { position: absolute; opacity: 0; text-align: center; font-size: 23px; font-weight: 500; color: var(--mute); white-space: nowrap; }
+.scene.array .pointer { position: absolute; text-align: center; color: var(--accent); }
+.scene.array .pointer .arrow { font-size: 22px; line-height: 1; }
+.scene.array .pointer .name { font-family: "IDR Mono", monospace; font-size: 26px; font-weight: 600; line-height: 1.2; }
+
+.scene.sequence .actor { position: absolute; background: var(--panel); border: 2px solid var(--line); border-radius: 16px;
+  display: flex; align-items: center; justify-content: center; text-align: center; font-family: "IDR Serif", serif; font-weight: 500;
+  font-size: 30px; line-height: 1.1; padding: 0 12px; overflow: hidden; white-space: nowrap; }
+.scene.sequence .life { stroke: var(--line); stroke-width: 3; stroke-dasharray: 3 9; stroke-linecap: round; opacity: 0; }
+.scene.sequence .msg .line { fill: none; stroke: var(--ink); stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; stroke-dasharray: 0 1; }
+.scene.sequence .msg.reply .line { stroke-dasharray: 9 8; opacity: 0; }
+.scene.sequence .msg .head { fill: var(--ink); stroke: var(--ink); stroke-width: 2; stroke-linejoin: round; opacity: 0; }
+.scene.sequence .msg.lit .line { stroke: var(--accent); stroke-width: 5; }
+.scene.sequence .msg.lit .head { fill: var(--accent); stroke: var(--accent); }
+.scene.sequence .mlabel { position: absolute; font-size: 25px; line-height: 1.12; text-align: center; background: var(--bg); padding: 0 8px;
+  border-radius: 8px; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+html[data-format="tall"] .scene.sequence .mlabel { font-size: 23px; }
+.scene.sequence .mlabel.lit { color: var(--accent); font-weight: 600; }
+
+.scene.chart .c1 { --c: var(--accent); }
+.scene.chart .c2 { --c: var(--curve-2); }
+.scene.chart .c3 { --c: var(--curve-3); }
+.scene.chart .grid { stroke: var(--line); stroke-width: 2; opacity: 0; }
+.scene.chart .base { stroke: var(--mute); stroke-width: 2.5; }
+.scene.chart .nick { stroke: var(--mute); stroke-width: 2; }
+.scene.chart .tick { position: absolute; text-align: center; font-size: 22px; color: var(--mute); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.scene.chart .tick.left { text-align: right; }
+.scene.chart .axistitle { position: absolute; font-size: 22px; font-weight: 500; color: var(--mute); white-space: nowrap; }
+.scene.chart .rowlabel { position: absolute; display: flex; align-items: center; justify-content: flex-end; text-align: right; font-size: 26px;
+  line-height: 1.15; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.scene.chart div.rowlabel:not([style]) { display: inline-block; }
+.scene.chart .bar { position: absolute; background: var(--c); border-radius: 0 7px 7px 0; opacity: 0.9; }
+.scene.chart .bar.lit { opacity: 1; }
+.scene.chart .value { position: absolute; display: flex; align-items: center; font-family: "IDR Mono", monospace; font-size: 24px; color: var(--mute);
+  white-space: nowrap; opacity: 0; }
+.scene.chart .value.lit { color: var(--ink); font-weight: 600; }
+.scene.chart .value.pin { background: var(--bg); border: 2px solid var(--line); border-radius: 10px; padding: 4px 12px; font-size: 26px; }
+.scene.chart .legend { position: absolute; right: var(--padX); display: flex; gap: 30px; font-size: 24px; }
+.scene.chart .legend .item { display: flex; align-items: center; gap: 10px; }
+.scene.chart .legend .swatch { width: 26px; height: 14px; border-radius: 4px; background: var(--c); }
+.scene.chart .curve { fill: none; stroke: var(--c); stroke-width: 4.5; stroke-linecap: round; stroke-linejoin: round; stroke-dasharray: 0 1; }
+.scene.chart .pt { fill: var(--c); opacity: 0; }
+.scene.chart .spot { fill: var(--bg); stroke: var(--c); stroke-width: 5; opacity: 0; }
+
 /* The padding keeps the overhang of a slanted last letter (a comment ends most lines that have one) inside the box that clips. */
 .scene.code .ln .src { overflow: hidden; text-overflow: ellipsis; padding-right: 0.35em; }
 .scene.code .ln.add { background: var(--add); }

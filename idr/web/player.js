@@ -346,6 +346,467 @@
     }
   };
 
+  // --- diagrams, rows of cells, sequences, charts -------------------------------------------------
+  const NS = 'http://www.w3.org/2000/svg';
+  const svgEl = (tag, attrs, parent) => {
+    const node = document.createElementNS(NS, tag);
+    for (const [k, v] of Object.entries(attrs || {})) node.setAttribute(k, v);
+    if (parent) parent.appendChild(node);
+    return node;
+  };
+  const px2 = v => v.toFixed(2);
+  // An SVG the size of the frame, under the boxes that sit on it.
+  const canvas = root => {
+    const svg = svgEl('svg', { class: 'ink', viewBox: `0 0 ${G.W} ${G.H}`, width: G.W, height: G.H }, root);
+    return svg;
+  };
+  const fadeTrack = (node, initial = 0) => track(initial, v => { node.style.opacity = v.toFixed(3); });
+  // Shrink a box's text until it fits its box.
+  const shrink = (node, floor = 16) => {
+    let size = parseFloat(getComputedStyle(node).fontSize);
+    while (size > floor && (node.scrollWidth > node.clientWidth + 1 || node.scrollHeight > node.clientHeight + 1)) {
+      size -= 1;
+      node.style.fontSize = `${size}px`;
+    }
+  };
+  // The same for a block that wraps: no word wider than `w`, and no taller than `h` in all.
+  const shrinkTo = (node, w, h, floor = 16) => {
+    node.style.width = `${w}px`;
+    let size = parseFloat(getComputedStyle(node).fontSize);
+    while (size > floor && (node.scrollWidth > w + 1 || node.offsetHeight > h + 1)) {
+      size -= 1;
+      node.style.fontSize = `${size}px`;
+    }
+  };
+
+  // A diagram with branches. plan.py has placed every node in a layer and a slot, and given every arrow its
+  // route through the layers; here those become pixels.
+  builders.diagram = (root, scene) => {
+    header(root, scene);
+    const top = below(root, 40), W = G.W - 2 * G.padX, H = G.bottom - top;
+    const svg = canvas(root);
+    const right = scene.direction === 'right';
+    const L = scene.layers, A = scene.across;
+    const along = Math.min(right ? 430 : 250, (right ? W : H) / L);
+    const cross = Math.min(right ? 230 : 420, (right ? H : W) / A);
+    const nw = right ? Math.min(310, along * 0.62) : Math.min(340, cross - 96);
+    const nh = right ? Math.min(150, cross - 44) : Math.min(124, along * 0.56);
+    const midX = G.padX + W / 2, midY = top + H / 2;
+    const centre = ([layer, slot]) => right
+      ? [midX + (layer - (L - 1) / 2) * along, midY + slot * cross]
+      : [midX + slot * cross, midY + (layer - (L - 1) / 2) * along];
+
+    const nodes = scene.nodes.map(nd => {
+      const [cx, cy] = centre(nd.at);
+      const box = root.appendChild(el('div', 'node'));
+      box.style.cssText = `left:${px2(cx - nw / 2)}px; top:${px2(cy - nh / 2)}px; width:${px2(nw)}px; height:${px2(nh)}px;`;
+      const ring = box.appendChild(el('div', 'ring'));
+      const text = box.appendChild(el('div', 'text'));
+      const label = text.appendChild(el('div', 'label', nd.label));
+      if (nd.desc) text.appendChild(el('div', 'desc', nd.desc));
+      shrinkTo(text, nw - 36, nh - 22, 15);
+      return { cx, cy, layer: nd.at[0], slot: nd.at[1], a: anim(box, { o: 0, s: 0.94 }), ring: fadeTrack(ring) };
+    });
+
+    // Where arrows leave and enter a box: spread along the side that faces the next point of their route, in
+    // the order of where they come from, so two arrows between the same boxes run side by side.
+    const ends = scene.edges.map(e => ({ start: null, end: null }));
+    const sides = new Map();
+    scene.edges.forEach((e, k) => {
+      if (e.route.length < 2) return;
+      for (const which of ['start', 'end']) {
+        const node = which === 'start' ? e.from : e.to;
+        const next = which === 'start' ? e.route[1] : e.route[e.route.length - 2];
+        const far = next[0] > scene.nodes[node].at[0];
+        const key = `${node}:${far ? 'far' : 'near'}`;
+        if (!sides.has(key)) sides.set(key, []);
+        sides.get(key).push({ k, which, slot: next[1] });
+      }
+    });
+    for (const [key, list] of sides) {
+      const [n, side] = key.split(':');
+      const node = nodes[+n], far = side === 'far';
+      list.sort((p, q) => p.slot - q.slot || p.k - q.k);
+      const room = (right ? nh : nw) - 28, gap = Math.min(38, room / Math.max(list.length, 1));
+      list.forEach((p, i) => {
+        const off = (i - (list.length - 1) / 2) * gap;
+        ends[p.k][p.which] = right
+          ? { x: node.cx + (far ? nw / 2 : -nw / 2), y: node.cy + off, port: i, of: list.length }
+          : { x: node.cx + off, y: node.cy + (far ? nh / 2 : -nh / 2), port: i, of: list.length };
+      });
+    }
+    const bezier = (p, q) => right
+      ? [[p.x, p.y], [(p.x + q.x) / 2, p.y], [(p.x + q.x) / 2, q.y], [q.x, q.y]]
+      : [[p.x, p.y], [p.x, (p.y + q.y) / 2], [q.x, (p.y + q.y) / 2], [q.x, q.y]];
+    const on = (c, t) => [0, 1].map(i => (1 - t) ** 3 * c[0][i] + 3 * (1 - t) ** 2 * t * c[1][i] + 3 * (1 - t) * t * t * c[2][i] + t ** 3 * c[3][i]);
+    const HEAD = 15;
+    const edges = scene.edges.map((e, k) => {
+      const g = svgEl('g', { class: `edge${e.dashed ? ' dashed' : ''}` }, svg);
+      let d, tip, dir, at;
+      if (e.route.length < 2) {                         // an arrow from a box to itself: a loop on its outer side
+        const n = nodes[e.from];
+        if (right) {
+          const y = n.cy - nh / 2;
+          d = `M${px2(n.cx - 34)} ${px2(y)} C${px2(n.cx - 70)} ${px2(y - 74)} ${px2(n.cx + 70)} ${px2(y - 74)} ${px2(n.cx + 34)} ${px2(y - 5)}`;
+          tip = [n.cx + 34, y]; dir = [-0.42, 0.9]; at = [n.cx, y - 62];
+        } else {                                          // on the side with no neighbour, if there is one
+          const mates = nodes.filter(o => o.layer === n.layer);
+          const side = mates.length > 1 && n.slot === Math.min(...mates.map(o => o.slot)) ? -1 : 1;
+          const x = n.cx + side * nw / 2;
+          d = `M${px2(x)} ${px2(n.cy - 26)} C${px2(x + side * 84)} ${px2(n.cy - 60)} ${px2(x + side * 84)} ${px2(n.cy + 60)} ${px2(x + side * 5)} ${px2(n.cy + 26)}`;
+          tip = [x, n.cy + 26]; dir = [-0.9 * side, -0.42]; at = [x + side * 52, n.cy - 56];
+        }
+      } else {
+        const stops = [ends[k].start, ...e.route.slice(1, -1).map(p => { const [x, y] = centre(p); return { x, y }; }), ends[k].end];
+        const last = stops[stops.length - 1], before = stops[stops.length - 2];
+        const sign = Math.sign((right ? last.x - before.x : last.y - before.y) || 1);
+        dir = right ? [sign, 0] : [0, sign];
+        tip = [last.x, last.y];
+        stops[stops.length - 1] = { x: last.x - dir[0] * (HEAD - 3), y: last.y - dir[1] * (HEAD - 3) };   // the line ends inside the head
+        const curves = stops.slice(1).map((q, i) => bezier(stops[i], q));
+        d = `M${px2(stops[0].x)} ${px2(stops[0].y)} ` + curves.map(c => `C${c.slice(1).map(p => `${px2(p[0])} ${px2(p[1])}`).join(' ')}`).join(' ');
+        // The label sits on the arrow, in the gap after the box it leaves; side-by-side arrows stagger theirs.
+        // Where several arrows share a side, each label also steps off its line, away from the others.
+        const port = ends[k].start, shared = port.of > 1;
+        at = on(curves[0], shared ? (port.port % 2 ? 0.62 : 0.38) : 0.5);
+        at.push(shared ? (port.port < port.of / 2 ? -1 : 1) : 0);
+      }
+      const head = `M${px2(tip[0])} ${px2(tip[1])} L${px2(tip[0] - dir[0] * HEAD - dir[1] * HEAD * 0.5)} ${px2(tip[1] - dir[1] * HEAD + dir[0] * HEAD * 0.5)} ` +
+        `L${px2(tip[0] - dir[0] * HEAD + dir[1] * HEAD * 0.5)} ${px2(tip[1] - dir[1] * HEAD - dir[0] * HEAD * 0.5)} Z`;
+      svgEl('path', { class: 'line', d }, g);
+      svgEl('path', { class: 'head', d: head }, g);
+      const lit = svgEl('g', { class: 'lit' }, g);       // the same arrow in the accent colour, for when a beat walks it
+      svgEl('path', { class: 'line', d }, lit);
+      svgEl('path', { class: 'head', d: head }, lit);
+      let tag = null;
+      if (e.label) {
+        tag = root.appendChild(el('div', 'elabel', e.label));
+        const r = tag.getBoundingClientRect(), off = at[2] || 0;
+        const x = at[0] - r.width / 2 + (right ? 0 : off * (r.width / 2 + 8));
+        tag.style.left = `${px2(Math.min(Math.max(x, 8), G.W - r.width - 8))}px`;
+        tag.style.top = `${px2(at[1] - r.height / 2 + (right ? off * (r.height / 2 + 5) : 0))}px`;
+      }
+      return { o: fadeTrack(g), lit: fadeTrack(lit), tag: tag ? fadeTrack(tag) : null, tagNode: tag };
+    });
+    const hot = edges.map(e => e.tagNode ? switcher(false, v => e.tagNode.classList.toggle('lit', v)) : null);
+
+    for (const op of scene.ops) {
+      if (op.op === 'reveal') {
+        nodes[op.node].a.o.to(op.t, 1, 0.4);
+        nodes[op.node].a.s.to(op.t, 1, 0.45);
+      } else if (op.op === 'edge') {
+        edges[op.edge].o.to(op.t, 1, 0.35);
+        if (edges[op.edge].tag) edges[op.edge].tag.to(op.t + 0.1, 1, 0.3);
+      } else if (op.op === 'focus') {
+        nodes.forEach((n, i) => n.ring.to(op.t, op.nodes.includes(i) ? 1 : 0, 0.25));
+      } else if (op.op === 'follow') {
+        edges.forEach((e, k) => {
+          e.lit.to(op.t, op.edges.includes(k) ? 1 : 0, 0.3);
+          if (hot[k]) hot[k].set(op.t, op.edges.includes(k));
+        });
+      }
+    }
+  };
+
+  // A row of cells. plan.py has carried out every operation; an op here says who is in the row afterwards,
+  // who came in and who left, and each cell slides to its new place.
+  builders.array = (root, scene) => {
+    header(root, scene);
+    const top = below(root, 50), W = G.W - 2 * G.padX;
+    const n = scene.most, gap = Math.max(8, Math.min(16, W / n * 0.08));
+    const cw = Math.min(250, (W - gap * (n - 1)) / n), ch = Math.min(170, Math.max(84, cw * 0.8));
+    const font = Math.max(18, Math.min(60, (cw - 22) / (0.62 * Math.max(scene.longest, 2))));
+    const rowY = Math.max(top + 40, Math.min(top + (G.bottom - top - ch) / 2 - 30, G.bottom - ch - 150));
+    const startX = G.padX + (W - (n * cw + (n - 1) * gap)) / 2;
+    const xAt = i => startX + i * (cw + gap);
+
+    if (scene.capacity) {
+      for (let i = 0; i < scene.capacity; i++) {
+        const slot = root.appendChild(el('div', 'slot'));
+        slot.style.cssText = `left:${px2(xAt(i))}px; top:${px2(rowY)}px; width:${px2(cw)}px; height:${px2(ch)}px;`;
+        enter(slot, 0.3 + i * 0.03, 0, 0.4);
+      }
+    }
+    const idx = [];
+    if (scene.index) {
+      for (let i = 0; i < n; i++) {
+        const tag = root.appendChild(el('div', 'index', String(i)));
+        tag.style.cssText = `left:${px2(xAt(i))}px; top:${px2(rowY + ch + 12)}px; width:${px2(cw)}px;`;
+        idx.push(fadeTrack(tag));
+      }
+    }
+    const endTag = {};
+    for (const side of ['front', 'back']) {
+      if (!scene.ends[side]) continue;
+      const tag = root.appendChild(el('div', `end ${side}`, scene.ends[side]));
+      tag.style.cssText = `top:${px2(rowY - 54)}px; width:${px2(Math.max(cw, 220))}px; left:0;`;
+      const half = Math.max(cw, 220) / 2;
+      endTag[side] = { x: track(xAt(0) + cw / 2 - half, v => { tag.style.left = `${px2(v)}px`; }), o: fadeTrack(tag), half };
+    }
+    const cells = new Map();
+    for (const c of scene.cells) {
+      const box = root.appendChild(el('div', 'cell'));
+      box.style.cssText = `left:0; top:${px2(rowY)}px; width:${px2(cw)}px; height:${px2(ch)}px; font-size:${px2(font)}px;`;
+      const mark = box.appendChild(el('div', 'ring'));
+      box.appendChild(el('div', 'text', c.text));
+      cells.set(c.id, { a: anim(box, { o: 0, x: xAt(0), y: -46 }), mark: fadeTrack(mark), x: null });
+    }
+    const pointers = new Map();
+    const pointer = name => {
+      if (!pointers.has(name)) {
+        const tag = root.appendChild(el('div', 'pointer'));
+        tag.appendChild(el('div', 'arrow', '▲'));
+        tag.appendChild(el('div', 'name', name));
+        tag.style.cssText = `left:0; top:${px2(rowY + ch + (scene.index ? 52 : 14))}px; width:${px2(cw)}px;`;
+        pointers.set(name, { a: anim(tag, { o: 0, x: xAt(0) }), shown: false });
+      }
+      return pointers.get(name);
+    };
+
+    let row = [];
+    const arrange = (t, next, dur) => {                   // everyone in `next` goes to their place; the labels follow the row
+      next.forEach((id, i) => {
+        const c = cells.get(id);
+        if (c.x === null) { c.a.x.to(Math.max(t - 0.01, 0), xAt(i), 0); c.x = xAt(i); c.a.o.to(t, 1, 0.4); c.a.y.to(t, 0, 0.45); }
+        else if (c.x !== xAt(i)) { c.a.x.to(t, xAt(i), dur, easeInOut); c.x = xAt(i); }
+      });
+      idx.forEach((tr, i) => tr.to(t, i < next.length ? 1 : 0, 0.3));
+      if (endTag.front) endTag.front.o.to(t, next.length ? 1 : 0, 0.3);
+      if (endTag.back) {
+        endTag.back.o.to(t, next.length > 1 ? 1 : 0, 0.3);
+        if (next.length > 1) endTag.back.x.to(t, xAt(next.length - 1) + cw / 2 - endTag.back.half, dur, easeInOut);
+      }
+      row = next;
+    };
+    scene.start.forEach((id, i) => { const c = cells.get(id); c.a.x.to(0, xAt(i), 0); c.x = xAt(i); c.a.o.to(0.35 + i * 0.05, 1, 0.4); c.a.y.to(0.35 + i * 0.05, 0, 0.45); });
+    idx.forEach((tr, i) => tr.to(0.4, i < scene.start.length ? 1 : 0, 0.3));
+    if (endTag.front) endTag.front.o.to(0.5, scene.start.length ? 1 : 0, 0.3);
+    if (endTag.back && scene.start.length > 1) { endTag.back.x.to(0, xAt(scene.start.length - 1) + cw / 2 - endTag.back.half, 0); endTag.back.o.to(0.5, 1, 0.3); }
+    row = scene.start;
+
+    for (const op of scene.ops) {
+      if (op.op === 'change') {
+        if (op.leave !== undefined) { const c = cells.get(op.leave); c.a.o.to(op.t, 0, 0.35); c.a.y.to(op.t, -52, 0.4); }
+        if (op.verb === 'swap' || op.verb === 'move') {     // the cells that travel lift over the others on their way
+          for (const id of op.moved) { const c = cells.get(id); c.a.y.to(op.t, -ch * 0.62, 0.22); c.a.y.to(op.t + 0.34, 0, 0.26); }
+        }
+        arrange(op.t + (op.leave !== undefined && op.enter === undefined ? 0.18 : 0.02), op.row, 0.55);
+      } else if (op.op === 'mark') {
+        for (const [id, c] of cells) c.mark.to(op.t, op.cells.includes(id) ? 1 : 0, 0.25);
+      } else if (op.op === 'pointers') {
+        const want = new Set(Object.keys(op.at));
+        for (const [name, p] of pointers) if (!want.has(name) && p.shown) { p.a.o.to(op.t, 0, 0.25); p.shown = false; }
+        for (const [name, id] of Object.entries(op.at)) {
+          const p = pointer(name), x = xAt(row.indexOf(id));
+          if (p.shown) p.a.x.to(op.t, x, 0.4, easeInOut);
+          else { p.a.x.to(Math.max(op.t - 0.01, 0), x, 0); p.a.o.to(op.t, 1, 0.3); p.shown = true; }
+        }
+      }
+    }
+  };
+
+  // A sequence of messages: a line down the frame for each party, and the messages between them in order.
+  builders.sequence = (root, scene) => {
+    header(root, scene);
+    const top = below(root, 36), W = G.W - 2 * G.padX;
+    const svg = canvas(root);
+    const n = scene.actors.length, m = scene.messages.length;
+    const col = W / n, bw = Math.min(300, col - 28), bh = 66;
+    const xOf = i => G.padX + col * (i + 0.5);
+    const rowH = Math.min(G === FORMATS.tall ? 92 : 78, (G.bottom - top - bh - 46) / m);
+    const yOf = k => top + bh + 30 + rowH * (k + 0.72);
+    const foot = yOf(m - 1) + 30;
+    scene.actors.forEach((name, i) => {
+      const box = root.appendChild(el('div', 'actor', name));
+      box.style.cssText = `left:${px2(xOf(i) - bw / 2)}px; top:${px2(top)}px; width:${px2(bw)}px; height:${bh}px;`;
+      shrink(box, 16);
+      enter(box, 0.25 + i * 0.06, 14, 0.45);
+      const line = svgEl('line', { class: 'life', x1: px2(xOf(i)), x2: px2(xOf(i)), y1: px2(top + bh), y2: px2(foot) }, svg);
+      fadeTrack(line).to(0.3 + i * 0.06, 1, 0.5);
+    });
+    const HEAD = 14;
+    const rows = scene.messages.map((msg, k) => {
+      const y = yOf(k), a = xOf(msg.from), z = xOf(msg.to), self = msg.from === msg.to;
+      const g = svgEl('g', { class: `msg${msg.reply ? ' reply' : ''}` }, svg);
+      const dir = self ? -1 : Math.sign(z - a);
+      const d = self
+        ? `M${px2(a)} ${px2(y - 16)} H${px2(a + 62)} V${px2(y + 12)} H${px2(a + HEAD)}`
+        : `M${px2(a)} ${px2(y)} H${px2(z - dir * (HEAD - 2))}`;
+      const tipX = self ? a : z, tipY = self ? y + 12 : y;
+      const head = `M${px2(tipX)} ${px2(tipY)} L${px2(tipX - dir * HEAD)} ${px2(tipY - HEAD * 0.5)} L${px2(tipX - dir * HEAD)} ${px2(tipY + HEAD * 0.5)} Z`;
+      const line = svgEl('path', { class: 'line', d, ...(msg.reply ? {} : { pathLength: 1 }) }, g);   // a reply is dashed, so it fades in
+      const tip = svgEl('path', { class: 'head', d: head }, g);
+      const tag = root.appendChild(el('div', 'mlabel', msg.label));
+      const room = self ? G.W - G.padX - a - 80 : Math.abs(z - a) - 30;
+      tag.style.maxWidth = `${px2(Math.max(room, 80))}px`;
+      if (self) tag.style.textAlign = 'left';
+      const r = tag.getBoundingClientRect();
+      tag.style.left = `${px2(self ? a + 74 : (a + z) / 2 - r.width / 2)}px`;
+      tag.style.top = `${px2(self ? y - r.height / 2 - 2 : y - r.height - 7)}px`;
+      const lit = switcher(false, v => { g.classList.toggle('lit', v); tag.classList.toggle('lit', v); });
+      return {
+        draw: track(0, v => {                              // nothing at all before it starts: a round cap would leave a dot
+          if (!msg.reply) line.style.strokeDasharray = `${v.toFixed(4)} 1`;
+          line.style.opacity = msg.reply ? v.toFixed(3) : (v > 0 ? '1' : '0');
+        }),
+        tip: fadeTrack(tip), tag: anim(tag, { o: 0, y: 8 }), lit,
+      };
+    });
+    for (const op of scene.ops) {
+      if (op.op === 'reveal') {
+        const r = rows[op.message];
+        r.draw.to(op.t, 1, 0.4, easeInOut);
+        r.tip.to(op.t + 0.3, 1, 0.15);
+        r.tag.o.to(op.t + 0.08, 1, 0.3);
+        r.tag.y.to(op.t + 0.08, 0, 0.3);
+      } else if (op.op === 'focus') {
+        rows.forEach((r, k) => r.lit.set(op.t, k === op.message));
+      }
+    }
+  };
+
+  // A chart of numbers read from the source. Bars lie on their sides so names of any length fit beside them,
+  // and every bar carries its number as the file writes it.
+  builders.chart = (root, scene) => {
+    header(root, scene);
+    const top = below(root, 44), W = G.W - 2 * G.padX;
+    const S = scene.series.length, axis = scene.axis;
+    const legend = S > 1 ? root.appendChild(el('div', 'legend')) : null;
+    if (legend) {
+      scene.series.forEach((s, i) => { const item = legend.appendChild(el('div', `item c${i + 1}`)); item.appendChild(el('span', 'swatch')); item.appendChild(el('span', 'name', s.name)); });
+      legend.style.top = `${px2(top - 6)}px`;
+      enter(legend, 0.3, 10, 0.4);
+    }
+    const y0 = top + (legend ? 50 : 6);
+    const svg = canvas(root);
+    const span = axis.max - axis.min;
+
+    if (scene.chart === 'bar') {
+      const R = scene.labels.length;
+      const probe = root.appendChild(el('div', 'rowlabel'));
+      let labelW = 0;
+      for (const text of scene.labels) { probe.textContent = text; labelW = Math.max(labelW, probe.getBoundingClientRect().width); }
+      probe.remove();
+      labelW = Math.min(labelW + 26, W * 0.34);
+      let valueW = 0;
+      const vprobe = root.appendChild(el('div', 'value'));
+      for (const s of scene.series) for (const text of s.texts) { vprobe.textContent = text; valueW = Math.max(valueW, vprobe.getBoundingClientRect().width); }
+      vprobe.remove();
+      const x0 = G.padX + labelW, x1 = G.W - G.padX - valueW - 22;
+      const xOf = v => x0 + (v - axis.min) / span * (x1 - x0), zero = xOf(Math.min(Math.max(0, axis.min), axis.max));
+      const rowH = Math.min(86, (G.bottom - y0 - 64) / R), barH = Math.min(46, rowH * 0.68 / S);
+      const bottom = y0 + rowH * R;
+      for (const [v, text] of axis.ticks) {
+        const line = svgEl('line', { class: v === 0 ? 'base' : 'grid', x1: px2(xOf(v)), x2: px2(xOf(v)), y1: px2(y0 - 4), y2: px2(bottom + 6) }, svg);
+        fadeTrack(line).to(0.3, 1, 0.4);
+        const tick = root.appendChild(el('div', 'tick', text));
+        tick.style.cssText = `left:${px2(xOf(v) - 60)}px; top:${px2(bottom + 12)}px; width:120px;`;
+        enter(tick, 0.35, 0, 0.4);
+      }
+      if (axis.title) {
+        const title = root.appendChild(el('div', 'axistitle', axis.title));
+        title.style.cssText = `right:${G.padX}px; top:${px2(bottom + 44)}px;`;
+        enter(title, 0.4, 0, 0.4);
+      }
+      const rows = scene.labels.map((text, r) => {
+        const cy = y0 + rowH * (r + 0.5);
+        const label = root.appendChild(el('div', 'rowlabel', text));
+        label.style.cssText = `left:${G.padX}px; top:${px2(cy - rowH / 2)}px; width:${px2(labelW - 16)}px; height:${px2(rowH)}px;`;
+        const dim = [anim(label, { o: 0 })];
+        dim[0].o.to(0.35 + r * 0.04, 1, 0.4);
+        const bars = scene.series.map((s, i) => {
+          const v = s.values[r], y = cy - (S * barH + (S - 1) * 4) / 2 + i * (barH + 4);
+          const a = Math.min(zero, xOf(v)), z = Math.max(zero, xOf(v));
+          const bar = root.appendChild(el('div', `bar c${i + 1}`));
+          bar.style.cssText = `left:${px2(a)}px; top:${px2(y)}px; width:${px2(Math.max(z - a, 2))}px; height:${px2(barH)}px; transform-origin:${v < 0 ? 'right' : 'left'} center;`;
+          const value = root.appendChild(el('div', 'value', s.texts[r]));
+          value.style.cssText = v < 0 ? `right:${px2(G.W - a + 10)}px; top:${px2(y)}px; height:${px2(barH)}px;` : `left:${px2(z + 10)}px; top:${px2(y)}px; height:${px2(barH)}px;`;
+          value.style.fontSize = `${px2(Math.max(18, Math.min(28, barH * 0.72)))}px`;
+          const grow = track(0, k => { bar.style.transform = `scaleX(${Math.max(k, 0.0001).toFixed(4)})`; });
+          const hot = switcher(false, on => { bar.classList.toggle('lit', on); value.classList.toggle('lit', on); });
+          return { grow, bar: fadeTrack(bar, 1), value: fadeTrack(value), hot };
+        });
+        return { label: dim[0].o, bars };
+      });
+      for (const op of scene.ops) {
+        if (op.op === 'reveal') {
+          rows.forEach((row, r) => { const b = row.bars[op.series]; b.grow.to(op.t + r * 0.04, 1, 0.6, easeInOut); b.value.to(op.t + 0.45 + r * 0.04, 1, 0.3); });
+        } else if (op.op === 'highlight') {
+          const any = op.cells.length > 0;
+          rows.forEach((row, r) => {
+            const mine = op.cells.filter(c => c.row === r);
+            row.label.to(op.t, !any || mine.length ? 1 : 0.38, 0.25);
+            row.bars.forEach((b, i) => {
+              const on = mine.some(c => c.series === i);
+              b.bar.to(op.t, !any || on ? 1 : 0.3, 0.25);
+              b.value.to(op.t, !any || on ? 1 : 0.38, 0.25);
+              b.hot.set(op.t, on);
+            });
+          });
+        }
+      }
+      return;
+    }
+
+    // A line chart: the rows in the file's order along x, a line for each column of numbers.
+    const xs = scene.x;
+    const x0 = G.padX + 110, x1 = G.W - G.padX - 40, yTop = y0 + 16, yBottom = G.bottom - 92;
+    const xOf = v => x0 + (xs.max === xs.min ? 0.5 : (v - xs.min) / (xs.max - xs.min)) * (x1 - x0);
+    const yOf = v => yBottom - (v - axis.min) / span * (yBottom - yTop);
+    for (const [v, text] of axis.ticks) {
+      const line = svgEl('line', { class: v === 0 ? 'base' : 'grid', x1: px2(x0), x2: px2(x1), y1: px2(yOf(v)), y2: px2(yOf(v)) }, svg);
+      fadeTrack(line).to(0.3, 1, 0.4);
+      const tick = root.appendChild(el('div', 'tick left', text));
+      tick.style.cssText = `left:${px2(G.padX)}px; top:${px2(yOf(v) - 16)}px; width:96px;`;
+      enter(tick, 0.35, 0, 0.4);
+    }
+    for (const [v, text] of xs.ticks) {
+      const tick = root.appendChild(el('div', 'tick', text));
+      tick.style.cssText = `left:${px2(xOf(v) - 90)}px; top:${px2(yBottom + 14)}px; width:180px;`;
+      enter(tick, 0.35, 0, 0.4);
+      svgEl('line', { class: 'nick', x1: px2(xOf(v)), x2: px2(xOf(v)), y1: px2(yBottom), y2: px2(yBottom + 8) }, svg);
+    }
+    svgEl('line', { class: 'base', x1: px2(x0), x2: px2(x1), y1: px2(yBottom), y2: px2(yBottom) }, svg);
+    const titles = [[axis.title, `left:${G.padX}px; top:${px2(y0 - 30)}px;`], [xs.title, `right:${G.padX}px; top:${px2(yBottom + 50)}px;`]];
+    for (const [text, where] of titles) {
+      if (!text) continue;
+      const title = root.appendChild(el('div', 'axistitle', text));
+      title.style.cssText = where;
+      enter(title, 0.4, 0, 0.4);
+    }
+    const lines = scene.series.map((s, i) => {
+      const runs = [[]];
+      s.values.forEach((v, r) => { if (v === null) { if (runs[runs.length - 1].length) runs.push([]); } else runs[runs.length - 1].push(`${px2(xOf(xs.at[r]))} ${px2(yOf(v))}`); });
+      const d = runs.filter(run => run.length).map(run => `M${run.join(' L')}`).join(' ');
+      const path = svgEl('path', { class: `curve c${i + 1}`, d, pathLength: 1 }, svg);
+      const dots = s.values.length <= 24 ? s.values.map((v, r) => v === null ? null
+        : svgEl('circle', { class: `pt c${i + 1}`, cx: px2(xOf(xs.at[r])), cy: px2(yOf(v)), r: 5 }, svg)) : [];
+      const group = dots.filter(Boolean).map(dot => fadeTrack(dot));
+      return { draw: track(0, v => { path.style.strokeDasharray = `${v.toFixed(4)} 1`; path.style.opacity = v > 0 ? '1' : '0'; }), dots: group };
+    });
+    const spots = [];
+    for (const op of scene.ops) {
+      if (op.op === 'reveal') {
+        lines[op.series].draw.to(op.t, 1, 1.0, easeInOut);
+        lines[op.series].dots.forEach(dot => dot.to(op.t + 0.8, 1, 0.3));
+      } else if (op.op === 'highlight') {
+        spots.forEach(s => { s.dot.to(op.t, 0, 0.2); s.tag.to(op.t, 0, 0.2); });
+        spots.length = 0;
+        op.cells.forEach(c => {
+          const s = scene.series[c.series], X = xOf(xs.at[c.row]), Y = yOf(s.values[c.row]);
+          const dot = svgEl('circle', { class: `spot c${c.series + 1}`, cx: px2(X), cy: px2(Y), r: 11 }, svg);
+          const tag = root.appendChild(el('div', 'value lit pin', s.texts[c.row]));
+          const r = tag.getBoundingClientRect();
+          tag.style.left = `${px2(Math.min(Math.max(X - r.width / 2, x0), x1 - r.width))}px`;
+          tag.style.top = `${px2(Y - r.height - 18 < yTop - 30 ? Y + 18 : Y - r.height - 18)}px`;
+          const pair = { dot: fadeTrack(dot), tag: fadeTrack(tag) };
+          pair.dot.to(op.t, 1, 0.25); pair.tag.to(op.t + 0.05, 1, 0.25);
+          spots.push(pair);
+        });
+      }
+    }
+  };
+
   builders.compare = (root, scene) => {
     const t0 = header(root, scene);
     const top = below(root, 44);

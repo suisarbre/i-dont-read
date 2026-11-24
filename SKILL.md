@@ -108,19 +108,24 @@ A **beat** is one spoken sentence plus what changes on screen when that sentence
 | `diff` | The point is what changed: a commit, a PR, a before and after | `file`, `from` (a git ref), optional `to` (a git ref; default is the file on disk), `lines: [first, last]` in the new file, `expect`. Or `before` and `after`: two file paths | `show`: `"removed"`, `"added"` or `"changed"` lights those lines. `highlight` and `note` as in `code`, by new-file line number |
 | `quote` | The source says it best in its own words: prose in a text or Markdown file | `file`, `lines: [first, last]`, optional `ref`. Consecutive lines are joined into paragraphs (a blank line or a list item starts a new one) and Markdown marks are removed, so do not use it for code or for comments inside code | `mark`: a phrase, or a list of phrases, to run a marker over. Copy it as it reads on screen or from the raw Markdown, from within one paragraph |
 | `image` | The source is a picture, a web page or a PDF | `file` (an image, or a PDF with `page`), or `url` (a web address or a local `.html` file). For a page, optional `click` and `top` (see "Web pages" below) | `zoom`: move the camera to a region (`null` goes back to the top of the picture at full width). `box`: outline a region and dim the rest (`null` removes it). A region is `{ "find": "exact words on the page" }` for web pages and PDFs, or `[x, y, width, height]` as fractions of the whole picture, from 0 to 1 |
-| `flow` | A process, pipeline or sequence of parts | `nodes: [{ "label", "desc" }]` (2 to 6) | `reveal`: how many nodes are visible from now on. `focus`: which node (1-based) gets the ring |
+| `flow` | A process or pipeline that runs in one line (for branches and loops, `diagram`) | `nodes: [{ "label", "desc" }]` (2 to 6) | `reveal`: how many nodes are visible from now on. `focus`: which node (1-based) gets the ring |
 | `compare` | Two options, or before and after | `columns: [{ "title", "points": [] }, { ... }]` (exactly 2, up to 5 rows) | `reveal`: how many rows are visible from now on (a row is the same line in both columns) |
 | `stats` | The numbers are the story | `items: [{ "value", "label", "note" }]` (1 to 4) | `reveal`: how many cards are visible from now on |
 | `steps` | An ordered list: how to do something, or what you need from the user | `items: [{ "title", "detail", "cmd" }]` (1 to 6; `cmd` shows a command in monospace) | `reveal`: how many steps are visible from now on |
 | `math` | A formula is the point: from the source, or one you write to explain it | Read `ENGINE/guides/math.md` before you write one | Reveal formulas one by one, mark a term, put a note by it |
 | `table` | Rows and columns: results, options, a comparison of several things | From the source: `file` with `lines: [first, last]` around a Markdown table or around one LaTeX `tabular` in a `.tex` file (from its `\begin` line to its `\end` line), or a `.csv`/`.tsv` with `rows: [first, last]` (data rows after the header) and optional `columns` (names or 1-based numbers, in the order to show). Written for the video: `header` and `rows`, plus `source` for a credit line | `reveal`: how many rows are visible (the header always is). `highlight`: `{ "row": n }`, `{ "col": name or n }` or `{ "cell": [n, col] }` (`null` clears). `note`: a short label on the highlight's outline |
 | `plot` | The source is about mathematics, and the shape of a curve is the point | Read `ENGINE/guides/math.md` before you write one | Draw curves, and put points, tangents, areas, sums and arrows on them; every number is worked out by the engine |
+| `diagram` | Parts that branch, loop or depend on each other: a state machine, a decision, modules | Read `ENGINE/guides/diagrams.md` before you write one | Reveal nodes, ring one, walk along arrows; the engine lays it out |
+| `array` | What a list, queue, stack or ordered map holds, and how operations change it | Read `ENGINE/guides/diagrams.md` before you write one | Push, pop, move, swap; the engine works out what the row holds after each |
+| `sequence` | Who says what to whom, in order: a protocol, a request through services | Read `ENGINE/guides/diagrams.md` before you write one | Reveal messages one by one, pick one out |
+| `chart` | The source has a file or table of numbers, and their shape is the point | Read `ENGINE/guides/diagrams.md` before you write one | Bars or lines drawn from the file's own numbers; nothing can be typed in |
 
-**Two parts of these instructions are in files of their own**, so that a video about code does not carry the mathematics. They are not optional reading: what they cover cannot be done from this file alone.
+**Three parts of these instructions are in files of their own**, so that a video carries only what it uses. They are not optional reading: what they cover cannot be done from this file alone.
 
 | Read | When |
 |---|---|
 | `ENGINE/guides/math.md` | The source or the topic is mathematics: a formula to show, a paper with equations, a curve, a slope, an area. Read it before you write the storyboard. It has the `math` and `plot` scenes |
+| `ENGINE/guides/diagrams.md` | You want to draw how something is put together or how it runs (a diagram with branches, a row of cells that changes, messages between parties), or the source has a file of numbers worth charting. It has the `diagram`, `array`, `sequence` and `chart` scenes |
 | `ENGINE/guides/voice.md` | A sentence of narration holds anything that is not plain words (notation, a symbol, an identifier, a file name, an unusual name), or `check` warns that the voice cannot say something |
 
 Any beat can also carry `speak` (see section 8) or, with no `say`, a `hold` in seconds. `intro` and a chapter take `speak` beside their `say` too.
@@ -256,6 +261,7 @@ This is the reason the skill exists, so do not work around it.
 - The same holds for `math` and `table` scenes with `file`: the LaTeX and the cells are shown as the file has them. (What changes is what LaTeX itself would change: `\label{...}` is dropped, an equation gets the number the paper prints, and in a LaTeX table `$-0.8$` is shown as the number −0.8 and `\textbf{...}` as its text.) If the source writes a formula as plain text, like `log2 1/p`, do not present your LaTeX version of it as the source: write it in a `math` scene with `tex`, which is shown as an explanation, with no file line.
 - A `math` or `table` scene with `tex` or `header` is your explanation. Every value in a written table must come from the source, as in `stats`; name where in `source`.
 - Whatever is not from the source is labelled on screen: `"source": "none"` for a video with no source, `"beyond": true` for scenes that go past one, `"example": true` for code you wrote (section 7). Do not leave the label off to make a video look better sourced than it is.
+- A `chart` scene draws numbers from a file of the source, read by the engine; a number cannot be typed into it. It shows the source, like a `table` scene with `file`.
 - A `plot` scene is your explanation too. Plot a function the source gives or is plainly about, and say where it is from in `source`. Its points, slopes and areas are worked out by the engine from the formula, so they are exact for what is drawn; they are not a claim the source made unless the source says so.
 - Always set `expect` on a `code` or `diff` scene to a short string from the **first line** of `lines`. It pins the range: the render stops if that line is no longer there. Start the range on a line with something of its own on it, not on a lone brace.
 - A `mark` must be copied exactly from the quoted lines, and a `find` exactly from the page. The render stops if either is not found.
@@ -271,7 +277,7 @@ This is the reason the skill exists, so do not work around it.
 - `compare` points: at most 80 characters. A `note` beside a highlight: two or three words.
 - `stats` values: at most 10 characters. Put the words in `label`.
 - `steps`: titles and commands at most 48 characters each.
-- `math` and `plot`: their limits are in `ENGINE/guides/math.md`.
+- `math` and `plot`: their limits are in `ENGINE/guides/math.md`. `diagram`, `array`, `sequence` and `chart`: in `ENGINE/guides/diagrams.md`.
 - `table`: at most 6 columns and 8 rows (4 columns read best in the tall format), and 40 characters per cell.
 - Headings: at most 60 characters.
 
