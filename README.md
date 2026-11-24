@@ -11,7 +11,9 @@ An agent skill that turns a codebase, a document, or any text into a short narra
 - **Adds sound effects** on scene changes, highlights and reveals. All of them are synthesized in this repo.
 - **One idea per chapter.** Each idea gets its own chapter with a title card and a hard cut, and the mp4 carries real chapter markers.
 - **Length follows the content.** There is no fixed duration.
-- **Light and dark themes.**
+- **Changes, pages and PDFs too.** A real git diff, a live web page or a page of a PDF can be the thing on screen, with the camera zooming to text it finds there.
+- **Timed to the word.** The voice model reports when each word is spoken, so a highlight can land on a word in the middle of a sentence.
+- **Light and dark themes, wide and tall formats.** 1920×1080 by default, 1080×1920 with `--format tall`.
 - **Video is the whole answer.** No summary under it, no outline to approve. When something is missing on the machine, even the fix arrives as a video.
 
 ## Install as a skill
@@ -36,7 +38,7 @@ The agent reads the source, splits it into chapters, and writes a storyboard: a 
 3. Draw each scene as an HTML page in headless Chrome and film it frame by frame.
 4. Mix narration and sound effects, then join the scenes.
 
-Scene types: `code`, `quote`, `flow`, `compare`, `stats`, `steps`. `SKILL.md` documents the storyboard format.
+Scene types: `code`, `diff`, `quote`, `image`, `flow`, `compare`, `stats`, `steps`. `SKILL.md` documents the storyboard format.
 
 ## Use the engine directly
 
@@ -49,7 +51,7 @@ python -m idr render  examples/self/storyboard.json --root . --theme dark
 python -m idr voices
 ```
 
-`examples/self` explains this repo with this repo. `examples/kokoro-onnx` explains [kokoro-onnx](https://github.com/thewh1teagle/kokoro-onnx), the voice library used here; clone that repo and pass it as `--root` (line numbers match its commit `3596b26`, and the render stops with a clear error if they have moved).
+`examples/self` explains this repo with this repo. `examples/showcase` shows a diff, a web page, a PDF, an image and word-timed highlights. `examples/kokoro-onnx` explains [kokoro-onnx](https://github.com/thewh1teagle/kokoro-onnx), the voice library used here; clone that repo and pass it as `--root` (line numbers match its commit `3596b26`, and the render stops with a clear error if they have moved).
 
 ## When something is missing
 
@@ -59,16 +61,16 @@ The help videos are rendered from the storyboards beside them; `sh help/build.sh
 
 ## Settings
 
-Theme, voice, speed and captions are picked in this order: command line flag, then the storyboard, then a `.i-dont-read.json` file in the project root, then the defaults.
+Theme, format, voice, speed and captions are picked in this order: command line flag, then the storyboard, then a `.i-dont-read.json` file in the project root, then the defaults.
 
 ```json
-{ "theme": "dark", "voice": "am_michael", "speed": 1.0, "captions": true }
+{ "theme": "dark", "format": "wide", "voice": "am_michael", "speed": 1.0, "captions": true }
 ```
 
 ## Limits
 
 - Narration is English only for now.
-- Output is 1920×1080 at 30 fps.
+- The tall format is a first version: every scene works, but layouts are tuned for wide.
 
 ## License
 

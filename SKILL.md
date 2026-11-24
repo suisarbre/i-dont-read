@@ -96,7 +96,9 @@ A **beat** is one spoken sentence plus what changes on screen when that sentence
 | Scene | Use it when | Fields | What a beat can do |
 |---|---|---|---|
 | `code` | The point is in specific lines | `file`, `lines: [first, last]`, `expect` | `highlight`: a line number or `[first, last]` (stays until changed; `null` clears). `note`: a short label beside the highlight |
+| `diff` | The point is what changed: a commit, a PR, a before and after | `file`, `from` (a git ref), optional `to` (a git ref; default is the file on disk), `lines: [first, last]` in the new file, `expect`. Or `before` and `after`: two file paths | `show`: `"removed"`, `"added"` or `"changed"` lights those lines. `highlight` and `note` as in `code`, by new-file line number |
 | `quote` | The source says it best in its own words | `file`, `lines: [first, last]` | `mark`: a phrase, or a list of phrases, to run a marker over |
+| `image` | The source is a picture, a web page or a PDF | `file` (an image, or a PDF with `page`), or `url` (a web address or a local `.html` file; the page is captured as it is now) | `zoom`: move the camera to a region (`null` pulls back). `box`: outline a region (`null` removes it). A region is `{ "find": "exact words on the page" }` for web pages and PDFs, or `[x, y, width, height]` as fractions from 0 to 1 |
 | `flow` | A process, pipeline or sequence of parts | `nodes: [{ "label", "desc" }]` (2 to 6) | `reveal`: how many nodes are visible from now on. `focus`: which node (1-based) gets the ring |
 | `compare` | Two options, or before and after | `columns: [{ "title", "points": [] }, { ... }]` (exactly 2, up to 5 rows) | `reveal`: how many rows are visible from now on |
 | `stats` | The numbers are the story | `items: [{ "value", "label", "note" }]` (1 to 4) | `reveal`: how many cards are visible from now on |
@@ -104,7 +106,20 @@ A **beat** is one spoken sentence plus what changes on screen when that sentence
 
 Any beat can also carry `speak` (see section 5) or, with no `say`, a `hold` in seconds.
 
-A chapter is usually 1 to 3 scenes. Alternate real source (`code`, `quote`) with an infographic (`flow`, `compare`, `stats`) that puts it in context.
+**Timing inside a sentence.** By default a beat's action fires when its sentence starts. To fire it on a word instead, add `"at": "a word or phrase from say"`. To do several things during one sentence, add `cues`, each with its own `at`:
+
+```json
+{ "say": "It builds a key, looks in the cache, and returns early on a hit.",
+  "at": "builds a key", "highlight": 3,
+  "cues": [ { "at": "looks in the cache", "highlight": 4 },
+            { "at": "returns early", "highlight": [5, 6], "note": "fast path" } ] }
+```
+
+Use this when one sentence walks across several lines or items. It reads far better than three short sentences, and the voice model reports when each word is spoken, so the picture lands on the word.
+
+A chapter is usually 1 to 3 scenes. Alternate real source (`code`, `diff`, `quote`, `image`) with an infographic (`flow`, `compare`, `stats`) that puts it in context.
+
+To explain a commit or a pull request, build the chapters from `diff` scenes: one change per chapter, `from` set to the base ref and `to` set to the head ref. The repository must have both refs locally, so fetch them first.
 
 ## 5. Writing the narration
 
@@ -120,15 +135,16 @@ A chapter is usually 1 to 3 scenes. Alternate real source (`code`, `quote`) with
 
 This is the reason the skill exists, so do not work around it.
 
-- `code` and `quote` scenes show only what is in the file at those lines. Never paste code or prose into the storyboard.
-- Always set `expect` on a `code` scene to a short string from the first line you care about. The render stops if the lines moved.
-- A `mark` must be copied exactly from the quoted lines. The render stops if it is not found.
+- `code`, `diff` and `quote` scenes show only what is in the file at those lines. Never paste code or prose into the storyboard.
+- Always set `expect` on a `code` or `diff` scene to a short string from the **first line** of `lines`. It pins the range: the render stops if that line is no longer there.
+- A `mark` must be copied exactly from the quoted lines, and a `find` exactly from the page. The render stops if either is not found.
+- An `image` scene shows the real file or the real page. Do not draw or generate a picture and present it as the source.
 - Every number in a `stats` scene and every claim in a `compare` scene must come from the source. Put where it came from in `note` when you can.
 - If the source does not say something, the video does not say it either.
 
 ## 7. Limits the check enforces
 
-- `code`: at most 16 lines per scene, and 12 or fewer reads best; lines over about 96 columns are cut off. Pick the lines that matter and split long passages into two scenes.
+- `code` and `diff`: at most 16 lines per scene, and 12 or fewer reads best; in the wide format lines over about 96 columns are cut off (the tall format wraps them). Pick the lines that matter and split long passages into two scenes.
 - `quote`: at most 640 characters. Quote the paragraph that matters, not the page.
 - `flow` labels: about 12 characters with 5 or 6 nodes, 18 with fewer.
 - `stats` values: at most 10 characters. Put the words in `label`.
@@ -138,6 +154,7 @@ This is the reason the skill exists, so do not work around it.
 ## 8. Settings
 
 - Theme: light by default. If the user asks for dark, add `--theme dark` (or `"theme": "dark"` in the storyboard).
-- A `.i-dont-read.json` file in `--root` sets the user's defaults: `{ "theme": "dark", "voice": "am_michael", "speed": 1.0, "captions": true }`. If the user wants a setting to stick, write it there.
+- Format: wide (1920×1080) by default. If the user wants a vertical video, for a phone or for Shorts, add `--format tall` (1080×1920). The same storyboard works in both; preview it again in the format you will render.
+- A `.i-dont-read.json` file in `--root` sets the user's defaults: `{ "theme": "dark", "format": "tall", "voice": "am_michael", "speed": 1.0, "captions": true }`. If the user wants a setting to stick, write it there.
 - `python -m idr voices` lists the voices. `--voice NAME` picks one, `--no-captions` turns the burnt-in captions off, `--silent` renders without voice.
-- Output is 1920×1080 at 30 fps, named `<storyboard>_<theme>.mp4` in `--out`.
+- Output is 30 fps, named `<storyboard>_<theme>.mp4` in `--out` (`<storyboard>_<theme>_tall.mp4` for the tall format).

@@ -96,12 +96,13 @@ def mark() -> np.ndarray:
 EFFECTS = {"whoosh": whoosh, "tick": tick, "pop": pop, "chime": chime, "mark": mark}
 
 # How loud each effect sits under the narration (linear gain on the 0.8-peak file).
-GAIN = {"whoosh": 0.16, "tick": 0.22, "pop": 0.28, "chime": 0.22, "mark": 0.12}
+GAIN = {"whoosh": 0.16, "tick": 0.22, "pop": 0.28, "chime": 0.22, "mark": 0.12, "zoom": 0.08}
+ALIASES = {"zoom": "whoosh"}   # a camera move is a quieter whoosh
 
 
 @lru_cache(maxsize=None)
 def load(name: str) -> np.ndarray:
-    samples, rate = sf.read(DIR / f"{name}.wav", dtype="float32")
+    samples, rate = sf.read(DIR / f"{ALIASES.get(name, name)}.wav", dtype="float32")
     assert rate == RATE, rate
     return samples
 
