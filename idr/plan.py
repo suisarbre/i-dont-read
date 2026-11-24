@@ -216,7 +216,7 @@ class _Clock:
             if problem:                                 # after notation has been turned into words (speech.py)
                 self.b.warn(self.where, f"in the sentence {text[:44]!r}..., {problem}; "
                             + ('write "speak" in plain words' if beat.get("speak") else
-                               'add "speak" with how it should be said aloud'))
+                               'add "speak" with how it should be said aloud') + " (guides/voice.md has the rules)")
             clip = self.b.narrator.say(speech.spoken(beat.get("speak") or text, self.b.pronounce))
             self.scene.narration.append((start, clip.samples))
             self._captions(text, start, clip, exact)
