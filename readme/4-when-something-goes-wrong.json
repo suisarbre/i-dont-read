@@ -1,7 +1,7 @@
 {
   "title": "When something goes wrong",
   "intro": {
-    "say": "Missing tools, a missing voice, a missing font, and source that has moved."
+    "say": "Missing tools, a missing voice, a missing font, and pages that will not open."
   },
   "chapters": [
     {
@@ -105,12 +105,12 @@
       ]
     },
     {
-      "title": "It will not show what is not there",
-      "say": "And when the error is about the source itself?",
+      "title": "A page that will not open",
+      "say": "And when the thing to explain is a web page?",
       "scenes": [
         {
           "type": "quote",
-          "heading": "Errors on purpose",
+          "heading": "Logins, walls and dialogs",
           "file": "DONT_README.md",
           "lines": [
             64,
@@ -118,43 +118,55 @@
           ],
           "beats": [
             {
-              "say": "The engine refuses to show something that is not there.",
-              "mark": "refuses to show something that is not there"
+              "say": "A page that needs a login cannot be opened. Save it as an HTML file or a PDF, and point at that instead.",
+              "at": "Save it",
+              "mark": "save the page as an .html file or a PDF"
             },
             {
-              "say": "If a file changed and the lines have moved, the check stops, and says which scene and why.",
-              "at": "the check stops",
-              "mark": "says which scene and why"
+              "say": "A page that stops at a subscription wall is explained only up to the wall, and the caption says so.",
+              "at": "only up to",
+              "mark": "explained only up to the wall"
+            },
+            {
+              "say": "And a consent dialog is closed the way a reader would close it.",
+              "mark": "by pressing its own button"
             }
           ]
         },
         {
-          "type": "code",
-          "heading": "The guard itself",
-          "file": "idr/plan.py",
-          "lines": [
-            281,
-            290
+          "type": "steps",
+          "heading": "So, for a page",
+          "items": [
+            {
+              "title": "Needs a login",
+              "detail": "Save the page and point at the file"
+            },
+            {
+              "title": "Stops at a wall",
+              "detail": "You get the part that can be read"
+            },
+            {
+              "title": "Covered by a dialog",
+              "detail": "Closed with its own button"
+            }
           ],
-          "expect": "def _expect",
           "beats": [
             {
-              "say": "This is that guard. Every code scene says what its first line should contain.",
-              "highlight": [
-                286,
-                287
+              "say": "Three cases, then: save it yourself, get the part that can be read, or nothing to do at all.",
+              "reveal": 1,
+              "cues": [
+                {
+                  "at": "get the part",
+                  "reveal": 2
+                },
+                {
+                  "at": "or nothing",
+                  "reveal": 3
+                }
               ]
             },
             {
-              "say": "If the file no longer agrees, the render stops here instead of showing the wrong lines.",
-              "highlight": [
-                288,
-                290
-              ],
-              "note": "stop"
-            },
-            {
-              "say": "So an error like this is the tool keeping its promise."
+              "say": "Whatever is missing, the answer is still a video that says so."
             }
           ]
         }

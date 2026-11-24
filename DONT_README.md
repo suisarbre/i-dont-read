@@ -61,7 +61,7 @@ A setting is picked in this order: command line flag, then the storyboard, then 
 
 If only the voice model is unavailable, `render --silent` still makes a video, with captions carrying the narration. If the machine has no font for some characters on screen, the render says which, and installing a font that covers them (Noto Sans CJK for Korean, Japanese and Chinese) fixes it.
 
-The engine refuses to show something that is not there. If a file changed and the lines a scene points at have moved, or a phrase to mark is not in the text, or the words to find are not on the page, the check stops with an error that says which scene and why.
+A web page that needs a login cannot be opened, and neither can one the network blocks: save the page as an `.html` file or a PDF and point at that instead. A page that stops at a subscription wall is explained only up to the wall, and the caption says so. A consent dialog over the page is closed the way a reader would close it, by pressing its own button.
 
 The help videos are rendered from the storyboards beside them; `sh help/build.sh` rebuilds them.
 
