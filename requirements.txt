@@ -3,3 +3,4 @@ soundfile
 numpy
 playwright
 pygments
+pillow

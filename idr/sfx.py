@@ -75,10 +75,28 @@ def chime() -> np.ndarray:
     return _norm(_fade(x * (1 - np.exp(-t / 0.004)), 2, 120), 0.75)
 
 
-EFFECTS = {"whoosh": whoosh, "tick": tick, "pop": pop, "chime": chime}
+def mark() -> np.ndarray:
+    """Marker pen across a phrase: a short, soft brush of filtered noise."""
+    t = _t(0.3)
+    noise = np.random.default_rng(11).standard_normal(t.size)
+    pos = t / t[-1]
+    cutoff = 2200 + 1500 * pos
+    low = band = 0.0
+    out = np.empty_like(t)
+    for i in range(t.size):
+        f = 2 * np.sin(np.pi * cutoff[i] / RATE)
+        low += f * band
+        high = noise[i] - low - 1.2 * band
+        band += f * high
+        out[i] = band
+    env = np.minimum(1, pos / 0.12) * (1 - pos) ** 1.3
+    return _norm(_fade(out * env, 3, 30))
+
+
+EFFECTS = {"whoosh": whoosh, "tick": tick, "pop": pop, "chime": chime, "mark": mark}
 
 # How loud each effect sits under the narration (linear gain on the 0.8-peak file).
-GAIN = {"whoosh": 0.16, "tick": 0.22, "pop": 0.28, "chime": 0.22}
+GAIN = {"whoosh": 0.16, "tick": 0.22, "pop": 0.28, "chime": 0.22, "mark": 0.12}
 
 
 @lru_cache(maxsize=None)

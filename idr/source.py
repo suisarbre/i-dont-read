@@ -6,6 +6,7 @@ retyped, so a scene cannot show code that is not in the file.
 from __future__ import annotations
 
 import html
+import re
 from pathlib import Path
 
 from pygments import lex
@@ -98,3 +99,47 @@ def extract(root: Path, file: str, first: int, last: int) -> dict:
         "plain": [s[cut:] for s in chunk_plain],
         "lines": [_to_html(_dedent(line, cut)) for line in chunk_tokens],
     }
+
+
+# --- prose -------------------------------------------------------------------
+
+def clean(text: str) -> str:
+    """Light Markdown cleanup so quoted prose reads as prose. Applied to excerpts and to marks alike."""
+    text = re.sub(r"!\[([^\]]*)\]\([^)]*\)", r"\1", text)        # images -> alt text
+    text = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", text)         # links -> link text
+    text = re.sub(r"(\*\*|__|`)", "", text)                       # bold and code markers
+    text = re.sub(r"(?<!\w)[*_](?=\S)|(?<=\S)[*_](?!\w)", "", text)  # emphasis markers
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def excerpt(root: Path, file: str, first: int, last: int) -> list[str]:
+    """Lines first..last of a text file as cleaned paragraphs (blank lines separate paragraphs)."""
+    path = (root / file).resolve()
+    if not path.is_file():
+        raise FileNotFoundError(f"quote scene points at a file that does not exist: {file}")
+    lines = path.read_text(encoding="utf-8", errors="replace").split("\n")
+    if lines and lines[-1] == "":
+        lines.pop()
+    if not (1 <= first <= last <= len(lines)):
+        raise ValueError(f"{file} has {len(lines)} lines; cannot quote lines {first}-{last}")
+    marker = re.compile(r"^\s*(#{1,6}\s+|[-*+]\s+|\d+[.)]\s+)")       # headings and list items start a new paragraph
+    paragraphs, current = [], []
+
+    def flush() -> None:
+        if current:
+            paragraphs.append(clean(" ".join(current)))
+            current.clear()
+
+    for raw in lines[first - 1:last]:
+        line = re.sub(r"^\s*>\s?", "", raw)                             # blockquote marker
+        if not line.strip():
+            flush()
+            continue
+        if marker.match(line):
+            flush()
+            line = marker.sub("", line)
+        current.append(line)
+    flush()
+    if not paragraphs:
+        raise ValueError(f"{file} lines {first}-{last} contain no text")
+    return paragraphs

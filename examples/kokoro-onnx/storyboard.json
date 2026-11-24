@@ -1,0 +1,140 @@
+{
+  "title": "How kokoro-onnx turns text into speech",
+  "chapters": [
+    {
+      "title": "What it is",
+      "say": "What do you actually get when you install kokoro-onnx?",
+      "speak": "What do you actually get when you install Kokoro onyx?",
+      "scenes": [
+        {
+          "type": "quote",
+          "heading": "The pitch, from the README",
+          "file": "README.md",
+          "lines": [20, 25],
+          "beats": [
+            { "say": "The README keeps it short: text to speech on the ONNX runtime, with several languages and voices.",
+              "speak": "The read me keeps it short: text to speech on the onyx runtime, with several languages and voices.",
+              "mark": ["Supports multiple languages", "Offer multiple voices"] },
+            { "say": "It claims speed close to real time on an M1 Mac.",
+              "speak": "It claims speed close to real time on an M one Mac.",
+              "mark": "near real-time on macOS M1" },
+            { "say": "And the whole model is about three hundred megabytes, or eighty when quantized.",
+              "mark": "~300MB (quantized: ~80MB)" }
+          ]
+        },
+        {
+          "type": "flow",
+          "heading": "From text to sound",
+          "nodes": [
+            { "label": "Text", "desc": "What you want spoken" },
+            { "label": "Phonemes", "desc": "The sounds of the words" },
+            { "label": "Tokens", "desc": "One number per phoneme" },
+            { "label": "Model", "desc": "One pass per batch" },
+            { "label": "Audio", "desc": "24,000 samples a second" }
+          ],
+          "beats": [
+            { "say": "Inside, every request takes the same path. Text is first turned into phonemes, the sounds of the words.", "reveal": 2, "focus": 2 },
+            { "say": "Each phoneme is mapped to a number the model understands.", "reveal": 3, "focus": 3 },
+            { "say": "The model turns those numbers into audio, at twenty four thousand samples a second.", "reveal": 5, "focus": 5 }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "From text to tokens",
+      "say": "How does a sentence become something a neural network can read?",
+      "scenes": [
+        {
+          "type": "code",
+          "heading": "Words become phonemes",
+          "file": "src/kokoro_onnx/tokenizer.py",
+          "lines": [77, 89],
+          "expect": "def phonemize",
+          "beats": [
+            { "say": "This method does the first step. It hands the text to a phonemizer, keeping punctuation and stress marks.", "highlight": [85, 87], "note": "punctuation and stress kept" },
+            { "say": "A lock wraps the call, so only one thread uses the phonemizer at a time.", "highlight": 84 },
+            { "say": "Then anything outside the model's vocabulary is filtered out.", "highlight": 88, "note": "unknown sounds dropped" }
+          ]
+        },
+        {
+          "type": "code",
+          "heading": "Phonemes become numbers",
+          "file": "src/kokoro_onnx/tokenizer.py",
+          "lines": [67, 71],
+          "expect": "def tokenize",
+          "beats": [
+            { "say": "Tokenizing is a lookup. Each phoneme is replaced by its id in the vocabulary.", "highlight": 71 },
+            { "say": "But first comes a hard limit. Give it more phonemes than the limit, and it refuses.", "highlight": [69, 70], "note": "default limit: 510" }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Cutting long text",
+      "say": "The model reads at most five hundred and ten phonemes at once. So what happens to a long paragraph?",
+      "scenes": [
+        {
+          "type": "code",
+          "heading": "Where it is allowed to cut",
+          "file": "src/kokoro_onnx/chunker.py",
+          "lines": [13, 22],
+          "expect": "SENTENCE_MARKS",
+          "beats": [
+            { "say": "Long input is split into batches, and the code looks for the least disruptive place to cut.", "highlight": [16, 17] },
+            { "say": "The first choice is the end of a sentence.", "highlight": 19, "note": "1. sentence" },
+            { "say": "The second is a clause break, like a comma.", "highlight": 20, "note": "2. clause" },
+            { "say": "And the third is any gap between words.", "highlight": 21, "note": "3. word" }
+          ]
+        },
+        {
+          "type": "code",
+          "heading": "Batches of even size",
+          "file": "src/kokoro_onnx/chunker.py",
+          "lines": [75, 86],
+          "expect": "fewest = len(_pack",
+          "beats": [
+            { "say": "Filling every batch to the limit would leave a short one at the end, and a short batch is spoken at a different rate and loudness." },
+            { "say": "So it first counts the fewest batches it can get away with.", "highlight": [75, 76], "note": "fewest batches" },
+            { "say": "Then a binary search finds the smallest batch size that still needs no more batches than that.", "highlight": [78, 84], "note": "binary search" },
+            { "say": "The result is batches of nearly equal length.", "highlight": 86 }
+          ]
+        },
+        {
+          "type": "stats",
+          "heading": "The numbers it works with",
+          "items": [
+            { "value": "510", "label": "phonemes per batch, at most", "note": "MAX_PHONEME_LENGTH in config.py" },
+            { "value": "24,000", "label": "audio samples per second", "note": "SAMPLE_RATE in config.py" },
+            { "value": "0.25 s", "label": "pause after a sentence", "note": "default in create()" },
+            { "value": "0.1 s", "label": "pause after a clause", "note": "default in create()" }
+          ],
+          "beats": [
+            { "say": "Each batch holds at most five hundred and ten phonemes, and the audio comes out at twenty four thousand samples a second.", "reveal": 2 },
+            { "say": "Trimming removes the silence at the end of a batch, so a pause is added back: a quarter second after a sentence, a tenth after a clause.", "reveal": 4 }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "One pass through the model",
+      "say": "Finally, the part that actually makes sound.",
+      "scenes": [
+        {
+          "type": "code",
+          "heading": "Running the model",
+          "file": "src/kokoro_onnx/__init__.py",
+          "lines": [126, 138],
+          "expect": "inputs = {",
+          "beats": [
+            { "say": "The model takes three inputs. First the tokens, padded with a zero on each side.", "highlight": [127, 129], "note": "1. tokens" },
+            { "say": "Second, a style vector taken from the chosen voice.", "highlight": 130, "note": "2. style" },
+            { "say": "And third, the speed.", "highlight": [131, 133], "note": "3. speed" },
+            { "say": "One call runs the network, and the first output is the audio.", "highlight": [136, 137] },
+            { "say": "When the model provides them, a second output carries durations, which the library uses to work out where each phoneme starts.", "highlight": 138 },
+            { "say": "Text, phonemes, tokens, one model call, and you have speech.", "highlight": null }
+          ]
+        }
+      ]
+    }
+  ]
+}

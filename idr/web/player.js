@@ -109,20 +109,20 @@
 
     code(root, scene) {
       const h = header(root, scene);
+      const top = below(root);
       const panel = root.appendChild(el('div', 'panel'));
       const lines = panel.appendChild(el('div', 'lines'));
+      const note = root.appendChild(el('div', 'note'));
       const n = scene.lines.length;
 
       // Fit the font to the space left under the header and to the longest line.
-      const top = root.lastElementChild.previousElementSibling
-        ? root.lastElementChild.previousElementSibling.getBoundingClientRect().bottom + 34
-        : 76;
-      const padY = 30, bottomLimit = 936, innerW = 1712 - 150;
+      const padY = 24, bottomLimit = 936, panelW = 1712;
       let lh = Math.min(58, Math.floor((bottomLimit - top - 2 * padY) / n));
       let font = Math.round(lh * 0.56);
       const longest = Math.max(...scene.plain.map(s => s.length), 1);
-      font = Math.max(20, Math.min(font, Math.floor(innerW / (longest * 0.6))));
+      font = Math.max(18, Math.min(font, Math.floor((panelW - 150) / (longest * 0.6))));
       lh = Math.min(lh, Math.round(font / 0.52));
+      const gutter = Math.round(font * 3.4) + Math.round(font);
       panel.style.top = `${top}px`;
       lines.style.padding = `${padY}px 0`;
       lines.style.fontSize = `${font}px`;
@@ -133,19 +133,40 @@
         const row = lines.appendChild(el('div', 'ln'));
         const no = row.appendChild(el('span', 'no', String(scene.first + i)));
         no.style.width = `${Math.round(font * 3.4)}px`;
-        no.style.marginRight = `${Math.round(font * 1.0)}px`;
+        no.style.marginRight = `${Math.round(font)}px`;
         const src = row.appendChild(el('span', 'src'));
         src.innerHTML = html || ' ';
-        return { row, o: track(1, v => { row.style.opacity = v.toFixed(3); }) };
+        return { row, width: src.scrollWidth, o: track(1, v => { row.style.opacity = v.toFixed(3); }) };
       });
-      const note = lines.appendChild(el('div', 'note'));
       enter(panel, h.t + 0.05, 34, 0.6);
+
+      // A note sits at the right edge of the panel, on rows whose code is short enough
+      // that the note covers nothing. If no such rows exist it straddles the panel's top edge.
+      const noteRight = 36;
+      function noteTop(text, a, b) {
+        note.textContent = text;
+        const w = note.offsetWidth, hgt = note.offsetHeight;
+        note.textContent = '';
+        const clear = y => rows.every((r, i) => {
+          const rowTop = padY + i * lh;
+          const overlaps = rowTop < y + hgt && rowTop + lh > y;
+          return !overlaps || gutter + r.width + 28 < panelW - noteRight - w;
+        });
+        const centre = i => padY + i * lh + (lh - hgt) / 2;
+        const tries = [padY + ((a + b + 1) / 2) * lh - hgt / 2];
+        for (let i = a; i <= b; i++) tries.push(centre(i));
+        if (a > 0) tries.push(centre(a - 1));
+        if (b < n - 1) tries.push(centre(b + 1));
+        for (const y of tries) if (clear(y)) return y;
+        return -hgt / 2;
+      }
 
       const hlTop = track(padY, v => { hl.style.top = `${v.toFixed(2)}px`; });
       const hlH = track(lh, v => { hl.style.height = `${v.toFixed(2)}px`; });
       const hlO = track(0, v => { hl.style.opacity = v.toFixed(3); });
+      note.style.right = `${104 + noteRight}px`;
       const noteA = anim(note, { o: 0, x: 16 });
-      const noteTop = track(padY, v => { note.style.top = `${v.toFixed(2)}px`; });
+      const noteY = track(0, v => { note.style.top = `${(top + v).toFixed(2)}px`; });
       const noteText = switcher('', v => { note.textContent = v; });
       let shown = false, noteShown = false;
 
@@ -167,9 +188,8 @@
           if (noteShown) { noteA.o.to(t, 0, 0.15); noteA.x.to(t, 16, 0.15); t += 0.15; }
           noteShown = false;
           if (op.text) {
-            const a = op.from - scene.first, b = op.to - scene.first;
             noteText.set(t, op.text);
-            noteTop.to(t, padY + ((a + b + 1) / 2) * lh - 24, 0);
+            noteY.to(t, noteTop(op.text, op.from - scene.first, op.to - scene.first), 0);
             noteA.o.to(t + 0.12, 1, 0.3);
             noteA.x.to(t + 0.12, 0, 0.3);
             noteShown = true;
@@ -210,6 +230,105 @@
         }
       }
     },
+  };
+
+  // Where the main block of a scene starts: just under whatever header it has.
+  function below(root, gap = 34) {
+    const prev = root.lastElementChild;
+    return prev ? prev.getBoundingClientRect().bottom + gap : 76;
+  }
+
+  builders.quote = (root, scene) => {
+    const h = header(root, scene);
+    const top = below(root, 40);
+    const paper = root.appendChild(el('div', 'paper'));
+    paper.style.top = `${top}px`;
+    const marks = {};
+    for (const para of scene.paragraphs) {
+      const p = paper.appendChild(el('p'));
+      for (const seg of para) {
+        if (seg.mark === null || seg.mark === undefined) { p.appendChild(document.createTextNode(seg.text)); continue; }
+        const m = p.appendChild(el('mark', null, seg.text));
+        marks[seg.mark] = track(0, v => { m.style.backgroundSize = `${(v * 100).toFixed(2)}% 100%`; });
+      }
+    }
+    let font = 48;                                     // shrink the text until the paper fits above the captions
+    paper.style.fontSize = `${font}px`;
+    while (font > 26 && top + paper.getBoundingClientRect().height > 936) {
+      font -= 2;
+      paper.style.fontSize = `${font}px`;
+    }
+    enter(paper, h.t + 0.05, 34, 0.6);
+    for (const op of scene.ops) {
+      if (op.op === 'mark') marks[op.id].to(op.t, 1, op.dur, easeInOut);
+    }
+  };
+
+  builders.compare = (root, scene) => {
+    const h = header(root, scene);
+    const top = below(root, 44);
+    const grid = root.appendChild(el('div', 'grid'));
+    grid.style.top = `${top}px`;
+    const rows = Math.max(...scene.columns.map(c => c.points.length));
+    const cell = (cls, text) => {
+      const c = grid.appendChild(el('div', `cell ${cls}`));
+      c.appendChild(el('div', 'in', text || '\u00a0'));
+      return c;
+    };
+    cell('head a', scene.columns[0].title);
+    cell('head b', scene.columns[1].title);
+    const inner = [];
+    for (let r = 0; r < rows; r++) {
+      const last = r === rows - 1 ? ' last' : '';
+      const pair = [0, 1].map(c => cell(`pt${last}`, scene.columns[c].points[r]).firstChild);
+      inner.push(pair.map(node => anim(node, { o: 0, y: 14 })));
+    }
+    let font = 32;                                     // keep the table above the captions
+    while (font > 22 && top + grid.getBoundingClientRect().height > 936) {
+      font -= 2;
+      grid.querySelectorAll('.cell:not(.head) .in').forEach(n => { n.style.fontSize = `${font}px`; n.style.padding = `${font * 0.6}px 0`; });
+    }
+    enter(grid, h.t + 0.05, 34, 0.6);
+    for (const op of scene.ops) {
+      if (op.op === 'reveal') inner[op.row].forEach((a, i) => { a.o.to(op.t + i * 0.1, 1, 0.35); a.y.to(op.t + i * 0.1, 0, 0.35); });
+    }
+  };
+
+  builders.stats = (root, scene) => {
+    header(root, scene);
+    const top = Math.max(below(root, 70), 330);
+    const row = root.appendChild(el('div', 'row'));
+    row.style.top = `${top}px`;
+    const longest = Math.max(...scene.items.map(it => it.value.length));
+    const size = Math.min(150, Math.floor(((1712 - 40 * (scene.items.length - 1)) / scene.items.length - 80) / (longest * 0.56)));
+    const cards = scene.items.map(it => {
+      const card = row.appendChild(el('div', 'card'));
+      const value = card.appendChild(el('div', 'value', it.value));
+      value.style.fontSize = `${size}px`;
+      card.appendChild(el('div', 'label', it.label));
+      if (it.note) card.appendChild(el('div', 'note', it.note));
+      // Count up to the number inside the value, keeping its prefix, suffix, commas and decimals.
+      const m = it.value.match(/^([^\d]*)(\d[\d,]*(?:\.\d+)?)(.*)$/);
+      let count = null;
+      if (m) {
+        const target = parseFloat(m[2].replace(/,/g, ''));
+        const decimals = (m[2].split('.')[1] || '').length;
+        const commas = m[2].includes(',');
+        const fmt = v => {
+          const fixed = v.toFixed(decimals);
+          return m[1] + (commas ? Number(fixed).toLocaleString('en-US', { minimumFractionDigits: decimals }) : fixed) + m[3];
+        };
+        count = track(0, v => { value.textContent = v >= target ? it.value : fmt(v); });
+        count.target = target;
+      }
+      return { a: anim(card, { o: 0, y: 30, s: 0.96 }), count };
+    });
+    for (const op of scene.ops) {
+      if (op.op !== 'reveal') continue;
+      const c = cards[op.item];
+      c.a.o.to(op.t, 1, 0.4); c.a.y.to(op.t, 0, 0.45); c.a.s.to(op.t, 1, 0.45);
+      if (c.count) c.count.to(op.t + 0.1, c.count.target, 0.8, easeOut);
+    }
   };
 
   window.idr = {
