@@ -1,6 +1,7 @@
-kokoro-onnx>=0.4
+kokoro-onnx>=0.6
 soundfile
 numpy
 playwright
 pygments
 pillow
+pypdfium2

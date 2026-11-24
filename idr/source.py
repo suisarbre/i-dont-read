@@ -5,8 +5,10 @@ retyped, so a scene cannot show code that is not in the file.
 """
 from __future__ import annotations
 
+import difflib
 import html
 import re
+import subprocess
 from pathlib import Path
 
 from pygments import lex
@@ -75,30 +77,95 @@ def _to_html(line: Line) -> str:
     )
 
 
-def extract(root: Path, file: str, first: int, last: int) -> dict:
-    """Lines first..last (1-based, inclusive) of a file, highlighted and plain."""
+def _split(text: str) -> list[str]:
+    lines = text.split("\n")
+    if lines and lines[-1] == "":
+        lines.pop()
+    return lines
+
+
+def _rows(raw: list[tuple[str, int | None, int | None, Line, str]]) -> list[dict]:
+    """Rows for the player: (kind, old number, new number, tokens, plain text) with shared indentation removed."""
+    indents = [len(plain) - len(plain.lstrip(" ")) for *_, plain in raw if plain.strip()]
+    cut = min(indents) if indents else 0
+    return [{"a": str(a or ""), "b": str(b or ""), "kind": kind.strip(), "plain": plain[cut:],
+             "len": len(plain[cut:]), "html": _to_html(_dedent(tokens, cut))}
+            for kind, a, b, tokens, plain in raw]
+
+
+def extract(root: Path, file: str, first: int, last: int) -> list[dict]:
+    """Lines first..last (1-based, inclusive) of a file, as highlighted rows."""
     path = (root / file).resolve()
     if not path.is_file():
         raise FileNotFoundError(f"code scene points at a file that does not exist: {file}")
     text = path.read_text(encoding="utf-8", errors="replace").expandtabs(4)
-    plain = text.split("\n")
-    if plain and plain[-1] == "":
-        plain.pop()
+    plain = _split(text)
     if not (1 <= first <= last <= len(plain)):
         raise ValueError(f"{file} has {len(plain)} lines; cannot show lines {first}-{last}")
-    chunk_plain = plain[first - 1:last]
-    chunk_tokens = tokenize(path, text)[first - 1:last]
+    tokens = tokenize(path, text)
+    return _rows([(" ", None, n, tokens[n - 1], plain[n - 1]) for n in range(first, last + 1)])
 
-    # Drop the indentation shared by every non-blank line so nested code is not pushed right.
-    indents = [len(s) - len(s.lstrip(" ")) for s in chunk_plain if s.strip()]
-    cut = min(indents) if indents else 0
-    return {
-        "file": file,
-        "first": first,
-        "last": last,
-        "plain": [s[cut:] for s in chunk_plain],
-        "lines": [_to_html(_dedent(line, cut)) for line in chunk_tokens],
-    }
+
+# --- diffs --------------------------------------------------------------------
+
+def _git_show(root: Path, ref: str, file: str) -> str | None:
+    """The file as it was at a git ref, or None if it did not exist there."""
+    done = subprocess.run(["git", "-C", str(root), "show", f"{ref}:{file}"], capture_output=True)
+    if done.returncode != 0:
+        if b"exists on disk, but not in" in done.stderr or b"does not exist in" in done.stderr:
+            return None
+        raise ValueError(f"git could not read {file} at {ref!r}: {done.stderr.decode(errors='replace').strip()}")
+    return done.stdout.decode("utf-8", errors="replace")
+
+
+def diff(root: Path, spec: dict, first: int, last: int) -> tuple[list[dict], str]:
+    """The real change to a file between two points, around new-file lines first..last.
+
+    Either {"file", "from": git ref, "to": git ref (default: the file on disk)}
+    or {"before": path, "after": path}. Returns (rows, label for the scene).
+    """
+    if "before" in spec:
+        old_path, new_path = (root / spec["before"]).resolve(), (root / spec["after"]).resolve()
+        for path in (old_path, new_path):
+            if not path.is_file():
+                raise FileNotFoundError(f"diff scene points at a file that does not exist: {path.name}")
+        old, new = old_path.read_text(encoding="utf-8", errors="replace"), new_path.read_text(encoding="utf-8", errors="replace")
+        label = f"{spec['before']}  →  {spec['after']}"
+    else:
+        file, new_path = spec["file"], (root / spec["file"]).resolve()
+        old = _git_show(root, spec["from"], file) or ""
+        if spec.get("to"):
+            new = _git_show(root, spec["to"], file)
+            if new is None:
+                raise ValueError(f"{file} does not exist at {spec['to']!r}")
+        else:
+            if not new_path.is_file():
+                raise FileNotFoundError(f"diff scene points at a file that does not exist: {file}")
+            new = new_path.read_text(encoding="utf-8", errors="replace")
+        label = f"{file}  ·  {spec['from']} → {spec.get('to') or 'now'}"
+    old, new = old.expandtabs(4), new.expandtabs(4)
+    old_lines, new_lines = _split(old), _split(new)
+    old_tok, new_tok = tokenize(new_path, old), tokenize(new_path, new)
+
+    rows = []
+    for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, old_lines, new_lines, autojunk=False).get_opcodes():
+        if tag == "equal":
+            rows += [(" ", i1 + k + 1, j1 + k + 1, new_tok[j1 + k], new_lines[j1 + k]) for k in range(i2 - i1)]
+        else:
+            rows += [("-", i + 1, None, old_tok[i], old_lines[i]) for i in range(i1, i2)]
+            rows += [("+", None, j + 1, new_tok[j], new_lines[j]) for j in range(j1, j2)]
+    inside = [i for i, r in enumerate(rows) if r[2] is not None and first <= r[2] <= last]
+    if not inside:
+        raise ValueError(f"the new file has {len(new_lines)} lines; cannot show lines {first}-{last}")
+    lo, hi = inside[0], inside[-1]
+    while lo > 0 and rows[lo - 1][0] == "-":            # removed lines belong with the lines that replaced them
+        lo -= 1
+    while hi + 1 < len(rows) and rows[hi + 1][0] == "-":
+        hi += 1
+    window = rows[lo:hi + 1]
+    if all(r[0] == " " for r in window):
+        raise ValueError(f"nothing changed in lines {first}-{last}; pick the lines where the change is")
+    return _rows(window), label
 
 
 # --- prose -------------------------------------------------------------------

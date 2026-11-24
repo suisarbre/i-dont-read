@@ -1,0 +1,60 @@
+<!doctype html><html><head><meta charset="utf-8"><title>i-dont-read</title>
+<style>
+body { font: 18px/1.6 Georgia, serif; max-width: 820px; margin: 48px auto; padding: 0 32px; color: #141413; background: #fff; }
+h1 { font-size: 44px; margin-bottom: 0; } h2 { font-size: 28px; margin-top: 40px; border-bottom: 1px solid #e8e6dc; padding-bottom: 6px; }
+code { font: 15px ui-monospace, monospace; background: #f0eee6; padding: 2px 5px; border-radius: 4px; }
+pre { background: #f0eee6; padding: 16px; border-radius: 8px; overflow: auto; } pre code { background: none; padding: 0; }
+</style></head><body><h1>i-dont-read</h1>
+<p><strong>Don&#39;t read. Just watch.</strong></p>
+<p>An agent skill that turns a codebase, a document, or any text into a short narrated explainer video.</p>
+<h2>What it does</h2>
+<ul>
+<li><strong>Shows the real source.</strong> Code and text are read straight from the files by line range and highlighted on screen. Nothing is retyped.</li>
+<li><strong>Narrates it.</strong> A local voice model (Kokoro) speaks every sentence, so no account or API key is needed.</li>
+<li><strong>Adds sound effects</strong> on scene changes, highlights and reveals. All of them are synthesized in this repo.</li>
+<li><strong>One idea per chapter.</strong> Each idea gets its own chapter with a title card and a hard cut, and the mp4 carries real chapter markers.</li>
+<li><strong>Length follows the content.</strong> There is no fixed duration.</li>
+<li><strong>Light and dark themes.</strong></li>
+<li><strong>Video is the whole answer.</strong> No summary under it, no outline to approve. When something is missing on the machine, even the fix arrives as a video.</li>
+</ul>
+<h2>Install as a skill</h2>
+<p>Claude Code:</p>
+<pre><code class="language-bash">git clone https://github.com/suisarbre/i-dont-read ~/.claude/skills/i-dont-read
+pip install -r ~/.claude/skills/i-dont-read/requirements.txt
+</code></pre>
+<p>Then ask for it: &quot;explain this repo as a video&quot;, &quot;make a video of this document&quot;.</p>
+<p>You also need <code>ffmpeg</code> and Google Chrome or Chromium. The first render downloads the voice model (about 350 MB) into <code>~/.cache/i-dont-read</code>.</p>
+<h2>How it works</h2>
+<p>The agent reads the source, splits it into chapters, and writes a storyboard: a JSON file listing the scenes, the sentences to speak, and what to show during each sentence. The engine in <code>idr/</code> does the rest.</p>
+<ol>
+<li>Speak every sentence and measure how long it takes.</li>
+<li>Time the visuals to the audio, so each highlight lands when its sentence starts.</li>
+<li>Draw each scene as an HTML page in headless Chrome and film it frame by frame.</li>
+<li>Mix narration and sound effects, then join the scenes.</li>
+</ol>
+<p>Scene types: <code>code</code>, <code>quote</code>, <code>flow</code>, <code>compare</code>, <code>stats</code>, <code>steps</code>. <code>SKILL.md</code> documents the storyboard format.</p>
+<h2>Use the engine directly</h2>
+<pre><code class="language-bash">python -m idr doctor                                             # is this machine ready to render?
+python -m idr check   examples/self/storyboard.json --root .    # validate and estimate length
+python -m idr preview examples/self/storyboard.json --root .    # one frame per scene, to look at
+python -m idr render  examples/self/storyboard.json --root .    # make out/storyboard_light.mp4
+python -m idr render  examples/self/storyboard.json --root . --theme dark
+python -m idr voices
+</code></pre>
+<p><code>examples/self</code> explains this repo with this repo. <code>examples/kokoro-onnx</code> explains <a href="https://github.com/thewh1teagle/kokoro-onnx">kokoro-onnx</a>, the voice library used here; clone that repo and pass it as <code>--root</code> (line numbers match its commit <code>3596b26</code>, and the render stops with a clear error if they have moved).</p>
+<h2>When something is missing</h2>
+<p><code>python -m idr doctor</code> checks the Python packages, ffmpeg, the browser and the voice model. For each problem it names a ready-made video in <code>help/</code> that explains the fix, and the skill sends that video instead of an error message. If only the voice model is unavailable, <code>render --silent</code> still makes a captioned video.</p>
+<p>The help videos are rendered from the storyboards beside them; <code>sh help/build.sh</code> rebuilds them.</p>
+<h2>Settings</h2>
+<p>Theme, voice, speed and captions are picked in this order: command line flag, then the storyboard, then a <code>.i-dont-read.json</code> file in the project root, then the defaults.</p>
+<pre><code class="language-json">{ &quot;theme&quot;: &quot;dark&quot;, &quot;voice&quot;: &quot;am_michael&quot;, &quot;speed&quot;: 1.0, &quot;captions&quot;: true }
+</code></pre>
+<h2>Limits</h2>
+<ul>
+<li>Narration is English only for now.</li>
+<li>Output is 1920×1080 at 30 fps.</li>
+</ul>
+<h2>License</h2>
+<p>MIT. Bundled fonts (Source Serif 4, Inter, JetBrains Mono) are under the SIL Open Font License; see <code>idr/web/fonts</code>.</p>
+
+</body></html>

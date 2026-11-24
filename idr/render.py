@@ -16,7 +16,7 @@ from .env import find_chrome
 from .plan import FPS, Scene
 
 WEB = Path(__file__).parent / "web"
-WIDTH, HEIGHT = 1920, 1080
+SIZES = {"wide": (1920, 1080), "tall": (1080, 1920)}
 ENCODE = ["-c:v", "libx264", "-crf", "18", "-preset", "veryfast", "-pix_fmt", "yuv420p"]
 
 
@@ -29,18 +29,21 @@ def _player_version() -> str:
 
 def scene_key(scene: Scene) -> str:
     """Changes whenever the picture would: scene content, timing, or the player itself."""
-    blob = json.dumps([scene.payload, scene.frames, FPS, WIDTH, HEIGHT, ENCODE, _player_version()], sort_keys=True)
+    blob = json.dumps([scene.payload, scene.frames, FPS, ENCODE, _player_version()], sort_keys=True)
     return hashlib.sha256(blob.encode()).hexdigest()[:16]
 
 
 class Studio:
     """One browser page, reused for every scene."""
 
+    def __init__(self, fmt: str = "wide"):
+        self.width, self.height = SIZES[fmt]
+
     def __enter__(self):
         self._pw = sync_playwright().start()
         chrome = find_chrome()
         self._browser = self._pw.chromium.launch(executable_path=chrome, args=["--no-sandbox"])
-        self.page = self._browser.new_page(viewport={"width": WIDTH, "height": HEIGHT}, device_scale_factor=1)
+        self.page = self._browser.new_page(viewport={"width": self.width, "height": self.height}, device_scale_factor=1)
         self.page.goto((WEB / "player.html").as_uri())
         return self
 

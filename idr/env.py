@@ -7,11 +7,13 @@ import shutil
 import urllib.request
 from pathlib import Path
 
-RELEASE = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0"
+# The v1.1 release carries a re-export of the v1.0 model that also reports phoneme durations,
+# which is what lets a highlight land on a word in the middle of a sentence.
+RELEASE = "https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.1"
 MODEL = "kokoro-v1.0.onnx"   # full precision: faster on CPU than the int8 build
 VOICES = "voices-v1.0.bin"
 PACKAGES = {"kokoro_onnx": "kokoro-onnx", "soundfile": "soundfile", "numpy": "numpy",
-            "playwright": "playwright", "pygments": "pygments", "PIL": "pillow"}
+            "playwright": "playwright", "pygments": "pygments", "PIL": "pillow", "pypdfium2": "pypdfium2"}
 HELP = Path(__file__).parent.parent / "help"   # ready-made videos that explain each fix
 
 

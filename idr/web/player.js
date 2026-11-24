@@ -5,6 +5,13 @@
   const easeOut = x => 1 - Math.pow(1 - x, 3);
   const easeInOut = x => (x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2);
 
+  // Frame geometry per format. `bottom` is how far down content may reach before the captions.
+  const FORMATS = {
+    wide: { W: 1920, H: 1080, padX: 104, top: 76, bottom: 936 },
+    tall: { W: 1080, H: 1920, padX: 64, top: 170, bottom: 1500 },
+  };
+  let G = FORMATS.wide;
+
   let tracks = [];   // things to evaluate on every seek
   let windows = [];  // [start, end] spans during which the picture changes
   let styled = [];   // elements whose opacity/transform are driven by tracks
@@ -15,7 +22,6 @@
     const keys = [];
     let current = initial;
     const tr = {
-      get value() { return current; },
       to(t, value, dur = 0.45, ease = easeOut) {
         if (value === current) return tr;
         keys.push({ t, value, dur, ease });
@@ -89,157 +95,144 @@
 
   function header(root, scene) {
     let t = 0.05;
-    const out = {};
-    for (const [key, cls] of [['kicker', 'kicker'], ['heading', 'heading'], ['sub', 'sub']]) {
+    for (const key of ['kicker', 'heading', 'sub']) {
       if (!scene[key]) continue;
-      out[key] = root.appendChild(el('div', cls, scene[key]));
-      enter(out[key], t);
+      enter(root.appendChild(el('div', key, scene[key])), t);
       t += 0.1;
     }
-    return { ...out, t };
+    return t;
   }
-
-  const builders = {
-    title(root, scene) {
-      const h = header(root, scene);
-      const rule = root.appendChild(el('div', 'rule'));
-      rule.style.transform = 'scaleX(0)';
-      track(0, v => { rule.style.transform = `scaleX(${v.toFixed(4)})`; }).to(h.t + 0.05, 1, 0.7, easeInOut);
-    },
-
-    code(root, scene) {
-      const h = header(root, scene);
-      const top = below(root);
-      const panel = root.appendChild(el('div', 'panel'));
-      const lines = panel.appendChild(el('div', 'lines'));
-      const note = root.appendChild(el('div', 'note'));
-      const n = scene.lines.length;
-
-      // Fit the font to the space left under the header and to the longest line.
-      const padY = 24, bottomLimit = 936, panelW = 1712;
-      let lh = Math.min(58, Math.floor((bottomLimit - top - 2 * padY) / n));
-      let font = Math.round(lh * 0.56);
-      const longest = Math.max(...scene.plain.map(s => s.length), 1);
-      font = Math.max(18, Math.min(font, Math.floor((panelW - 150) / (longest * 0.6))));
-      lh = Math.min(lh, Math.round(font / 0.52));
-      const gutter = Math.round(font * 3.4) + Math.round(font);
-      panel.style.top = `${top}px`;
-      lines.style.padding = `${padY}px 0`;
-      lines.style.fontSize = `${font}px`;
-      lines.style.lineHeight = `${lh}px`;
-
-      const hl = lines.appendChild(el('div', 'hl'));
-      const rows = scene.lines.map((html, i) => {
-        const row = lines.appendChild(el('div', 'ln'));
-        const no = row.appendChild(el('span', 'no', String(scene.first + i)));
-        no.style.width = `${Math.round(font * 3.4)}px`;
-        no.style.marginRight = `${Math.round(font)}px`;
-        const src = row.appendChild(el('span', 'src'));
-        src.innerHTML = html || ' ';
-        return { row, width: src.scrollWidth, o: track(1, v => { row.style.opacity = v.toFixed(3); }) };
-      });
-      enter(panel, h.t + 0.05, 34, 0.6);
-
-      // A note sits at the right edge of the panel, on rows whose code is short enough
-      // that the note covers nothing. If no such rows exist it straddles the panel's top edge.
-      const noteRight = 36;
-      function noteTop(text, a, b) {
-        note.textContent = text;
-        const w = note.offsetWidth, hgt = note.offsetHeight;
-        note.textContent = '';
-        const clear = y => rows.every((r, i) => {
-          const rowTop = padY + i * lh;
-          const overlaps = rowTop < y + hgt && rowTop + lh > y;
-          return !overlaps || gutter + r.width + 28 < panelW - noteRight - w;
-        });
-        const centre = i => padY + i * lh + (lh - hgt) / 2;
-        const tries = [padY + ((a + b + 1) / 2) * lh - hgt / 2];
-        for (let i = a; i <= b; i++) tries.push(centre(i));
-        if (a > 0) tries.push(centre(a - 1));
-        if (b < n - 1) tries.push(centre(b + 1));
-        for (const y of tries) if (clear(y)) return y;
-        return -hgt / 2;
-      }
-
-      const hlTop = track(padY, v => { hl.style.top = `${v.toFixed(2)}px`; });
-      const hlH = track(lh, v => { hl.style.height = `${v.toFixed(2)}px`; });
-      const hlO = track(0, v => { hl.style.opacity = v.toFixed(3); });
-      note.style.right = `${104 + noteRight}px`;
-      const noteA = anim(note, { o: 0, x: 16 });
-      const noteY = track(0, v => { note.style.top = `${(top + v).toFixed(2)}px`; });
-      const noteText = switcher('', v => { note.textContent = v; });
-      let shown = false, noteShown = false;
-
-      for (const op of scene.ops) {
-        if (op.op === 'highlight') {
-          const a = op.from - scene.first, b = op.to - scene.first;
-          const y = padY + a * lh, hgt = (b - a + 1) * lh;
-          hlTop.to(op.t, y, shown ? 0.4 : 0, easeInOut);
-          hlH.to(op.t, hgt, shown ? 0.4 : 0, easeInOut);
-          hlO.to(op.t, 1, 0.25);
-          rows.forEach((r, i) => r.o.to(op.t, i >= a && i <= b ? 1 : 0.4, 0.3));
-          shown = true;
-        } else if (op.op === 'clear') {
-          hlO.to(op.t, 0, 0.25);
-          rows.forEach(r => r.o.to(op.t, 1, 0.3));
-          shown = false;
-        } else if (op.op === 'note') {
-          let t = op.t;
-          if (noteShown) { noteA.o.to(t, 0, 0.15); noteA.x.to(t, 16, 0.15); t += 0.15; }
-          noteShown = false;
-          if (op.text) {
-            noteText.set(t, op.text);
-            noteY.to(t, noteTop(op.text, op.from - scene.first, op.to - scene.first), 0);
-            noteA.o.to(t + 0.12, 1, 0.3);
-            noteA.x.to(t + 0.12, 0, 0.3);
-            noteShown = true;
-          }
-        }
-      }
-    },
-
-    flow(root, scene) {
-      header(root, scene);
-      const row = root.appendChild(el('div', 'row'));
-      const parts = scene.nodes.map((nd, i) => {
-        let arrow = null;
-        if (i > 0) {
-          arrow = row.appendChild(el('div', 'arrow'));
-          arrow.innerHTML = '<svg viewBox="0 0 44 44"><path d="M6 22h30M26 11l11 11-11 11"/></svg>';
-        }
-        const node = row.appendChild(el('div', 'node'));
-        const ring = node.appendChild(el('div', 'ring'));
-        node.appendChild(el('div', 'idx', String(i + 1)));
-        node.appendChild(el('div', 'label', nd.label));
-        if (nd.desc) node.appendChild(el('div', 'desc', nd.desc));
-        return {
-          node: anim(node, { o: 0, y: 30, s: 0.96 }),
-          arrow: arrow ? anim(arrow, { o: 0, x: -14 }) : null,
-          ring: track(0, v => { ring.style.opacity = v.toFixed(3); }),
-        };
-      });
-      for (const op of scene.ops) {
-        if (op.op === 'reveal') {
-          const p = parts[op.node];
-          if (p.arrow) { p.arrow.o.to(op.t - 0.08, 1, 0.3); p.arrow.x.to(op.t - 0.08, 0, 0.3); }
-          p.node.o.to(op.t, 1, 0.4);
-          p.node.y.to(op.t, 0, 0.45);
-          p.node.s.to(op.t, 1, 0.45);
-        } else if (op.op === 'focus') {
-          parts.forEach((p, i) => p.ring.to(op.t, i === op.node ? 1 : 0, 0.25));
-        }
-      }
-    },
-  };
 
   // Where the main block of a scene starts: just under whatever header it has.
   function below(root, gap = 34) {
     const prev = root.lastElementChild;
-    return prev ? prev.getBoundingClientRect().bottom + gap : 76;
+    return prev ? prev.getBoundingClientRect().bottom + gap : G.top;
   }
 
+  const builders = {};
+
+  builders.title = (root, scene) => {
+    const t = header(root, scene);
+    const rule = root.appendChild(el('div', 'rule'));
+    rule.style.transform = 'scaleX(0)';
+    track(0, v => { rule.style.transform = `scaleX(${v.toFixed(4)})`; }).to(t + 0.05, 1, 0.7, easeInOut);
+  };
+
+  // Source lines: plain code, or a diff when rows carry a kind ('+', '-') and two line numbers.
+  builders.code = (root, scene) => {
+    const t0 = header(root, scene);
+    const top = below(root);
+    const panel = root.appendChild(el('div', 'panel'));
+    const lines = panel.appendChild(el('div', 'lines'));
+    const note = root.appendChild(el('div', 'note'));
+    const n = scene.rows.length;
+    const diff = scene.rows.some(r => r.kind);
+    const panelW = G.W - 2 * G.padX;
+    const tall = G === FORMATS.tall;
+
+    const hl = lines.appendChild(el('div', 'hl'));
+    const rows = scene.rows.map(r => {
+      const row = lines.appendChild(el('div', `ln${r.kind === '+' ? ' add' : r.kind === '-' ? ' del' : ''}`));
+      const nums = [];
+      if (diff) nums.push(row.appendChild(el('span', 'no', r.a || '')));
+      nums.push(row.appendChild(el('span', 'no', r.b || '')));
+      if (diff) nums.push(row.appendChild(el('span', 'no sign', r.kind || ' ')));
+      const src = row.appendChild(el('span', 'src'));
+      src.innerHTML = r.html || ' ';
+      return { row, nums, src, o: track(1, v => { row.style.opacity = v.toFixed(3); }) };
+    });
+
+    // Fit the font. Wide frames never wrap: the font follows the space and the longest line.
+    // Tall frames wrap long lines, so the font follows a comfortable line length instead.
+    const padY = 24, room = G.bottom - top - 2 * padY;
+    const longest = Math.max(...scene.rows.map(r => r.len), 1);
+    const gutterEm = diff ? 7.6 : 4.4;
+    const apply = font => {
+      lines.style.fontSize = `${font}px`;
+      lines.style.lineHeight = `${Math.round(font / 0.56)}px`;
+      rows.forEach(r => {
+        r.nums.forEach((no, i) => {
+          const sign = diff && i === r.nums.length - 1;
+          no.style.width = `${Math.round(font * (sign ? 1.2 : diff ? 2.6 : 3.4))}px`;
+          no.style.marginRight = `${Math.round(font * (sign ? 0.4 : diff ? 0.6 : 1))}px`;
+        });
+      });
+    };
+    panel.style.top = `${top}px`;
+    lines.style.padding = `${padY}px 0`;
+    const cols = tall ? Math.min(longest, 42) : longest;
+    let font = Math.min(tall ? 34 : 32, Math.floor(panelW / (cols * 0.6 + gutterEm)));
+    font = Math.min(font, Math.floor((room / n) * 0.56));
+    font = Math.max(tall ? 20 : 18, font);
+    apply(font);
+    while (font > 16 && lines.getBoundingClientRect().height - 2 * padY > room) apply(--font);
+    const box = rows.map(r => ({ top: r.row.offsetTop, h: r.row.offsetHeight, width: r.src.scrollWidth }));
+    const gutter = rows[0].src.offsetLeft;
+    enter(panel, t0 + 0.05, 34, 0.6);
+
+    // A note sits at the right edge of the panel, on rows whose code is short enough
+    // that the note covers nothing. If no such rows exist it straddles the panel's top edge.
+    const noteRight = 36;
+    function noteTop(text, a, b) {
+      note.textContent = text;
+      const w = note.offsetWidth, hgt = note.offsetHeight;
+      note.textContent = '';
+      const clear = y => box.every(r => {
+        const overlaps = r.top < y + hgt && r.top + r.h > y;
+        return !overlaps || gutter + r.width + 28 < panelW - noteRight - w;
+      });
+      const centre = i => box[i].top + (box[i].h - hgt) / 2;
+      const tries = [(box[a].top + box[b].top + box[b].h) / 2 - hgt / 2];
+      for (let i = a; i <= b; i++) tries.push(centre(i));
+      if (a > 0) tries.push(centre(a - 1));
+      if (b < n - 1) tries.push(centre(b + 1));
+      for (const y of tries) if (clear(y)) return y;
+      return -hgt / 2;
+    }
+
+    const hlTop = track(padY, v => { hl.style.top = `${v.toFixed(2)}px`; });
+    const hlH = track(box[0].h, v => { hl.style.height = `${v.toFixed(2)}px`; });
+    const hlO = track(0, v => { hl.style.opacity = v.toFixed(3); });
+    note.style.right = `${G.padX + noteRight}px`;
+    const noteA = anim(note, { o: 0, x: 16 });
+    const noteY = track(0, v => { note.style.top = `${(top + v).toFixed(2)}px`; });
+    const noteText = switcher('', v => { note.textContent = v; });
+    let shown = false, noteShown = false;
+
+    for (const op of scene.ops) {
+      if (op.op === 'highlight') {
+        const a = op.from, b = op.to;
+        hlTop.to(op.t, box[a].top, shown ? 0.4 : 0, easeInOut);
+        hlH.to(op.t, box[b].top + box[b].h - box[a].top, shown ? 0.4 : 0, easeInOut);
+        hlO.to(op.t, 1, 0.25);
+        rows.forEach((r, i) => r.o.to(op.t, i >= a && i <= b ? 1 : 0.4, 0.3));
+        shown = true;
+      } else if (op.op === 'lit') {                    // light some rows with no bar (diff: "show the removed lines")
+        const on = new Set(op.rows);
+        hlO.to(op.t, 0, 0.25);
+        rows.forEach((r, i) => r.o.to(op.t, on.has(i) ? 1 : 0.32, 0.3));
+        shown = false;
+      } else if (op.op === 'clear') {
+        hlO.to(op.t, 0, 0.25);
+        rows.forEach(r => r.o.to(op.t, 1, 0.3));
+        shown = false;
+      } else if (op.op === 'note') {
+        let t = op.t;
+        if (noteShown) { noteA.o.to(t, 0, 0.15); noteA.x.to(t, 16, 0.15); t += 0.15; }
+        noteShown = false;
+        if (op.text) {
+          noteText.set(t, op.text);
+          noteY.to(t, noteTop(op.text, op.from, op.to), 0);
+          noteA.o.to(t + 0.12, 1, 0.3);
+          noteA.x.to(t + 0.12, 0, 0.3);
+          noteShown = true;
+        }
+      }
+    }
+  };
+
   builders.quote = (root, scene) => {
-    const h = header(root, scene);
+    const t0 = header(root, scene);
     const top = below(root, 40);
     const paper = root.appendChild(el('div', 'paper'));
     paper.style.top = `${top}px`;
@@ -254,25 +247,69 @@
     }
     let font = 48;                                     // shrink the text until the paper fits above the captions
     paper.style.fontSize = `${font}px`;
-    while (font > 26 && top + paper.getBoundingClientRect().height > 936) {
+    while (font > 26 && top + paper.getBoundingClientRect().height > G.bottom) {
       font -= 2;
       paper.style.fontSize = `${font}px`;
     }
-    enter(paper, h.t + 0.05, 34, 0.6);
+    enter(paper, t0 + 0.05, 34, 0.6);
     for (const op of scene.ops) {
       if (op.op === 'mark') marks[op.id].to(op.t, 1, op.dur, easeInOut);
     }
   };
 
+  builders.flow = (root, scene) => {
+    header(root, scene);
+    const tall = G === FORMATS.tall;
+    const top = tall ? below(root, 50) : Math.max(below(root, 50), 340);
+    const row = root.appendChild(el('div', 'row'));
+    row.style.top = `${top}px`;
+    const parts = scene.nodes.map((nd, i) => {
+      let arrow = null;
+      if (i > 0) {
+        arrow = row.appendChild(el('div', 'arrow'));
+        arrow.innerHTML = '<svg viewBox="0 0 44 44"><path d="M6 22h30M26 11l11 11-11 11"/></svg>';
+      }
+      const node = row.appendChild(el('div', 'node'));
+      const ring = node.appendChild(el('div', 'ring'));
+      node.appendChild(el('div', 'idx', String(i + 1)));
+      const text = node.appendChild(el('div', 'text'));
+      text.appendChild(el('div', 'label', nd.label));
+      if (nd.desc) text.appendChild(el('div', 'desc', nd.desc));
+      return {
+        node: anim(node, tall ? { o: 0, x: -30, s: 0.98 } : { o: 0, y: 30, s: 0.96 }),
+        arrow: arrow ? anim(arrow, tall ? { o: 0, y: -12 } : { o: 0, x: -14 }) : null,
+        ring: track(0, v => { ring.style.opacity = v.toFixed(3); }),
+      };
+    });
+    let k = 1;                                         // tall frames stack the nodes; shrink if the stack is too long
+    while (k > 0.6 && top + row.getBoundingClientRect().height > G.bottom) {
+      k -= 0.05;
+      row.style.zoom = k;
+      row.style.width = `${(G.W - 2 * G.padX) / k}px`;
+    }
+    for (const op of scene.ops) {
+      if (op.op === 'reveal') {
+        const p = parts[op.node];
+        if (p.arrow) { p.arrow.o.to(op.t - 0.08, 1, 0.3); p.arrow.x.to(op.t - 0.08, 0, 0.3); p.arrow.y.to(op.t - 0.08, 0, 0.3); }
+        p.node.o.to(op.t, 1, 0.4);
+        p.node.x.to(op.t, 0, 0.45);
+        p.node.y.to(op.t, 0, 0.45);
+        p.node.s.to(op.t, 1, 0.45);
+      } else if (op.op === 'focus') {
+        parts.forEach((p, i) => p.ring.to(op.t, i === op.node ? 1 : 0, 0.25));
+      }
+    }
+  };
+
   builders.compare = (root, scene) => {
-    const h = header(root, scene);
+    const t0 = header(root, scene);
     const top = below(root, 44);
     const grid = root.appendChild(el('div', 'grid'));
     grid.style.top = `${top}px`;
     const rows = Math.max(...scene.columns.map(c => c.points.length));
     const cell = (cls, text) => {
       const c = grid.appendChild(el('div', `cell ${cls}`));
-      c.appendChild(el('div', 'in', text || '\u00a0'));
+      c.appendChild(el('div', 'in', text || ' '));
       return c;
     };
     cell('head a', scene.columns[0].title);
@@ -284,11 +321,11 @@
       inner.push(pair.map(node => anim(node, { o: 0, y: 14 })));
     }
     let font = 32;                                     // keep the table above the captions
-    while (font > 22 && top + grid.getBoundingClientRect().height > 936) {
+    while (font > 22 && top + grid.getBoundingClientRect().height > G.bottom) {
       font -= 2;
       grid.querySelectorAll('.cell:not(.head) .in').forEach(n => { n.style.fontSize = `${font}px`; n.style.padding = `${font * 0.6}px 0`; });
     }
-    enter(grid, h.t + 0.05, 34, 0.6);
+    enter(grid, t0 + 0.05, 34, 0.6);
     for (const op of scene.ops) {
       if (op.op === 'reveal') inner[op.row].forEach((a, i) => { a.o.to(op.t + i * 0.1, 1, 0.35); a.y.to(op.t + i * 0.1, 0, 0.35); });
     }
@@ -296,13 +333,17 @@
 
   builders.stats = (root, scene) => {
     header(root, scene);
-    const top = Math.max(below(root, 70), 330);
+    const tall = G === FORMATS.tall;
+    const top = tall ? below(root, 60) : Math.max(below(root, 70), 330);
     const row = root.appendChild(el('div', 'row'));
     row.style.top = `${top}px`;
+    const perRow = tall ? Math.min(2, scene.items.length) : scene.items.length;
     const longest = Math.max(...scene.items.map(it => it.value.length));
-    const size = Math.min(150, Math.floor(((1712 - 40 * (scene.items.length - 1)) / scene.items.length - 80) / (longest * 0.56)));
+    const cardW = (G.W - 2 * G.padX - 40 * (perRow - 1)) / perRow;
+    const size = Math.min(150, Math.floor((cardW - 80) / (longest * 0.56)));
     const cards = scene.items.map(it => {
       const card = row.appendChild(el('div', 'card'));
+      card.style.width = `${cardW}px`;
       const value = card.appendChild(el('div', 'value', it.value));
       value.style.fontSize = `${size}px`;
       card.appendChild(el('div', 'label', it.label));
@@ -332,7 +373,7 @@
   };
 
   builders.steps = (root, scene) => {
-    const h = header(root, scene);
+    header(root, scene);
     const top = below(root, 44);
     const list = root.appendChild(el('div', 'list'));
     list.style.top = `${top}px`;
@@ -347,30 +388,86 @@
       return anim(item, { o: 0, y: 24 });
     });
     let k = 1;                                         // scale the whole list down until it clears the captions
-    while (k > 0.55 && top + list.getBoundingClientRect().height > 936) {
+    while (k > 0.55 && top + list.getBoundingClientRect().height > G.bottom) {
       k -= 0.05;
       inner.style.zoom = k;
       inner.style.width = `${100 / k}%`;
     }
-    void h;
     for (const op of scene.ops) {
       if (op.op === 'reveal') { parts[op.item].o.to(op.t, 1, 0.4); parts[op.item].y.to(op.t, 0, 0.45); }
     }
   };
 
+  // A real picture (image file, web page capture, PDF page) with a camera that zooms to regions.
+  builders.image = (root, scene) => {
+    const t0 = header(root, scene);
+    const top = below(root, 36);
+    const frameW = G.W - 2 * G.padX;
+    const frameH = Math.min(G.bottom - top, Math.round(frameW * scene.ih / scene.iw));
+    const frame = root.appendChild(el('div', 'frame'));
+    Object.assign(frame.style, { top: `${top}px`, width: `${frameW}px`, height: `${frameH}px` });
+    const layer = frame.appendChild(el('div', 'layer'));
+    Object.assign(layer.style, { width: `${scene.iw}px`, height: `${scene.ih}px` });
+    const img = layer.appendChild(el('img'));
+    img.src = scene.src;
+    const boxes = scene.boxes.map(b => {
+      const node = layer.appendChild(el('div', 'box'));
+      Object.assign(node.style, { left: `${b[0] * scene.iw}px`, top: `${b[1] * scene.ih}px`,
+        width: `${b[2] * scene.iw}px`, height: `${b[3] * scene.ih}px` });
+      return { node, o: track(0, v => { node.style.opacity = v.toFixed(3); }) };
+    });
+    enter(frame, t0 + 0.05, 34, 0.6);
+
+    // The camera is the part of the image that fills the frame: left, top and width in image pixels.
+    const cam = { x: 0, y: 0, w: scene.iw };
+    const draw = () => {
+      const s = frameW / cam.w;
+      layer.style.transform = `translate(${(-cam.x * s).toFixed(2)}px, ${(-cam.y * s).toFixed(2)}px) scale(${s.toFixed(5)})`;
+      boxes.forEach(b => { b.node.style.borderWidth = `${(5 / s).toFixed(2)}px`; b.node.style.borderRadius = `${(10 / s).toFixed(2)}px`; });
+    };
+    const cx = track(0, v => { cam.x = v; });
+    const cy = track(0, v => { cam.y = v; });
+    const cw = track(scene.iw, v => { cam.w = v; draw(); });   // added last, so one draw per frame sees all three
+    const aspect = frameH / frameW;
+    for (const op of scene.ops) {
+      if (op.op === 'cam') {
+        let x = 0, y = 0, w = scene.iw;
+        if (op.region) {
+          const [rx, ry, rw, rh] = op.region.map((v, i) => v * (i % 2 ? scene.ih : scene.iw));
+          // Zoom in at most 3x, and never so far that the picture's own pixels are blown up past 1.6x.
+          w = Math.min(scene.iw, Math.max(scene.iw / 3, frameW / 1.6, rw * 1.3, (rh * 1.3) / aspect));
+          x = Math.min(Math.max(0, rx + rw / 2 - w / 2), scene.iw - w);
+          y = Math.min(Math.max(0, ry + rh / 2 - (w * aspect) / 2), Math.max(0, scene.ih - w * aspect));
+        }
+        cx.to(op.t, x, 0.8, easeInOut); cy.to(op.t, y, 0.8, easeInOut); cw.to(op.t, w, 0.8, easeInOut);
+      } else if (op.op === 'box') {
+        boxes.forEach((b, i) => b.o.to(op.t, i === op.id ? 1 : 0, 0.3));
+      }
+    }
+    return img.decode().catch(() => { throw new Error(`could not load image ${scene.src}`); });
+  };
+
   window.idr = {
     async load(scene) {
       tracks = []; windows = []; styled = []; last = null;
-      document.documentElement.dataset.theme = scene.theme || 'light';
+      G = FORMATS[scene.format] || FORMATS.wide;
+      const html = document.documentElement;
+      html.dataset.theme = scene.theme || 'light';
+      html.dataset.format = scene.format || 'wide';
+      html.style.setProperty('--W', `${G.W}px`);
+      html.style.setProperty('--H', `${G.H}px`);
+      html.style.setProperty('--padX', `${G.padX}px`);
+      html.style.setProperty('--top', `${G.top}px`);
       await Promise.all([
         '500 20px "IDR Serif"', '400 20px "IDR Sans"', '500 20px "IDR Sans"', '600 20px "IDR Sans"',
         '400 20px "IDR Mono"', '600 20px "IDR Mono"',
       ].map(f => document.fonts.load(f)));
 
       const root = document.getElementById('scene');
-      root.className = `scene ${scene.type}`;
+      const kind = scene.type === 'diff' ? 'code' : scene.type;
+      root.className = `scene ${kind}`;
       root.innerHTML = '';
-      builders[scene.type](root, scene);
+      await builders[kind](root, scene);
 
       const cap = document.querySelector('#caption span');
       const capText = switcher('', v => { cap.textContent = v; cap.style.display = v ? '' : 'none'; });

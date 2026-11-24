@@ -1,0 +1,96 @@
+{
+  "title": "Diffs, pictures, and timing to the word",
+  "intro": { "say": "Three things the engine can show besides plain code." },
+  "chapters": [
+    {
+      "title": "A change, shown as a change",
+      "say": "What did this commit actually do?",
+      "scenes": [
+        {
+          "type": "diff",
+          "heading": "One handler, before and after",
+          "before": "media/before.py",
+          "after": "media/after.py",
+          "lines": [1, 10],
+          "expect": "def handle(request):",
+          "beats": [
+            { "say": "Here is one function before and after a change. The green lines are new.", "show": "added" },
+            {
+              "say": "It now builds a key, looks in the cache, and returns early on a hit.",
+              "at": "builds a key", "highlight": 3,
+              "cues": [
+                { "at": "looks in the cache", "highlight": 4 },
+                { "at": "returns early", "highlight": [5, 6], "note": "fast path" }
+              ]
+            },
+            {
+              "say": "Only on a miss does it reach the database, and then it saves the result for five minutes.",
+              "highlight": 7,
+              "cues": [ { "at": "saves the result", "highlight": 9, "note": "kept for 300 s" } ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Any page, any PDF",
+      "say": "Not everything worth explaining is code.",
+      "scenes": [
+        {
+          "type": "image",
+          "heading": "A web page, captured as it is",
+          "url": "media/readme.html",
+          "beats": [
+            { "say": "This is a real web page, captured by the browser as it looks right now." },
+            { "say": "The camera can move to any part of it, found by its text.",
+              "zoom": { "find": "Install as a skill" }, "box": { "find": "Install as a skill" } },
+            { "say": "And then pull back out.", "zoom": null, "box": null }
+          ]
+        },
+        {
+          "type": "image",
+          "heading": "A page of a PDF",
+          "file": "media/readme.pdf",
+          "page": 1,
+          "beats": [
+            { "say": "A page of a PDF works the same way." },
+            { "say": "The phrase is located in the document itself, so the box always lands on words that are really there.",
+              "at": "the box", "zoom": { "find": "Nothing is retyped" }, "box": { "find": "Nothing is retyped" } }
+          ]
+        },
+        {
+          "type": "image",
+          "heading": "A plain image",
+          "file": "media/scenes.png",
+          "beats": [
+            { "say": "For an ordinary image, a region is given as coordinates.", "zoom": [0.5, 0.0, 0.5, 0.33], "box": [0.5, 0.0, 0.5, 0.33] }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Timed to the word",
+      "say": "A highlight used to wait for the next sentence. Not anymore.",
+      "scenes": [
+        {
+          "type": "code",
+          "heading": "Three highlights in one sentence",
+          "file": "media/after.py",
+          "lines": [1, 10],
+          "expect": "def handle(request):",
+          "beats": [
+            {
+              "say": "Watch the highlight land on the key, then the lookup, then the early return, each as it is named.",
+              "cues": [
+                { "at": "the key", "highlight": 3 },
+                { "at": "the lookup", "highlight": 4 },
+                { "at": "the early return", "highlight": [5, 6] }
+              ]
+            },
+            { "say": "The voice model reports when every word is spoken, and the picture follows.", "highlight": null }
+          ]
+        }
+      ]
+    }
+  ]
+}

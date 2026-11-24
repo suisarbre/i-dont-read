@@ -18,7 +18,7 @@ from pathlib import Path
 from . import env   # standard library only; everything heavier is imported inside the commands
 
 CONFIG = ".i-dont-read.json"
-DEFAULTS = {"theme": "light", "voice": "af_heart", "speed": 1.0, "captions": True}
+DEFAULTS = {"theme": "light", "format": "wide", "voice": "af_heart", "speed": 1.0, "captions": True}
 
 
 class Blocked(SystemExit):
@@ -35,7 +35,14 @@ def settings(storyboard: dict, root: Path, args) -> dict:
     out.update({k: getattr(args, k) for k in DEFAULTS if getattr(args, k, None) is not None})
     if out["theme"] not in ("light", "dark"):
         raise ValueError(f"theme must be light or dark, not {out['theme']!r}")
+    if out["format"] not in ("wide", "tall"):
+        raise ValueError(f"format must be wide or tall, not {out['format']!r}")
     return out
+
+
+def _tag(opts: dict) -> str:
+    """What distinguishes this render's files: theme, plus the format when it is not the default."""
+    return opts["theme"] + ("_tall" if opts["format"] == "tall" else "")
 
 
 def _load(args) -> tuple[dict, Path, dict, Path]:
@@ -82,7 +89,7 @@ def cmd_check(args) -> None:
     from . import plan
 
     storyboard, root, opts, _ = _load(args)
-    scenes, warnings = plan.build(storyboard, root, opts["theme"], plan.DryNarrator(), opts["captions"])
+    scenes, warnings = plan.build(storyboard, root, opts["theme"], plan.DryNarrator(), opts["captions"], opts["format"])
     _report(scenes, warnings, estimated=True)
     print("ok" if not warnings else f"ok, with {len(warnings)} warning(s)")
 
@@ -98,21 +105,23 @@ def cmd_preview(args) -> None:
     out = Path(args.out).resolve()
     work = out / ".work" / "preview"
     work.mkdir(parents=True, exist_ok=True)
-    scenes, warnings = plan.build(storyboard, root, opts["theme"], plan.DryNarrator(), opts["captions"])
+    scenes, warnings = plan.build(storyboard, root, opts["theme"], plan.DryNarrator(), opts["captions"], opts["format"])
     _report(scenes, warnings, estimated=True)
     shots = []
-    with render.Studio() as studio:
+    with render.Studio(opts["format"]) as studio:
         for i, scene in enumerate(scenes):
             path = work / f"{i + 1:02d}.png"
             studio.still(scene, max(0.0, scene.duration - 0.75), path)
             shots.append(path)
     name = args.name or board_path.stem
-    for n in range(0, len(shots), 6):
-        group = shots[n:n + 6]
-        sheet = Image.new("RGB", (1920, 540 * ((len(group) + 1) // 2)), "#808080")
+    across, (w, h) = (4, (480, 854)) if opts["format"] == "tall" else (2, (960, 540))
+    per = across * (1 if opts["format"] == "tall" else 3)
+    for n in range(0, len(shots), per):
+        group = shots[n:n + per]
+        sheet = Image.new("RGB", (w * across, h * ((len(group) + across - 1) // across)), "#808080")
         for j, shot in enumerate(group):
-            sheet.paste(Image.open(shot).resize((960, 540), Image.LANCZOS), (960 * (j % 2), 540 * (j // 2)))
-        dest = out / f"{name}_{opts['theme']}_preview_{n // 6 + 1}.png"
+            sheet.paste(Image.open(shot).resize((w, h), Image.LANCZOS), (w * (j % across), h * (j // across)))
+        dest = out / f"{name}_{_tag(opts)}_preview_{n // per + 1}.png"
         sheet.save(dest)
         print(f"[preview] {dest}  (scenes {n + 1}-{n + len(group)})")
 
@@ -124,7 +133,7 @@ def cmd_render(args) -> None:
 
     storyboard, root, opts, board_path = _load(args)
     out = Path(args.out).resolve()
-    work = out / ".work" / (opts["theme"] + ("_silent" if args.silent else ""))
+    work = out / ".work" / (_tag(opts) + ("_silent" if args.silent else ""))
     work.mkdir(parents=True, exist_ok=True)
 
     t0 = time.time()
@@ -133,16 +142,16 @@ def cmd_render(args) -> None:
     else:
         narrator = Narrator(opts["voice"], opts["speed"])
     try:
-        scenes, warnings = plan.build(storyboard, root, opts["theme"], narrator, opts["captions"])
+        scenes, warnings = plan.build(storyboard, root, opts["theme"], narrator, opts["captions"], opts["format"])
     except VoiceUnavailable as problem:
         raise Blocked(f"blocked: {problem}. Render again with --silent to make a captioned video without voice, "
                       f"and send the user this video too: {env.HELP / 'voice-model.mp4'}") from None
     total = _report(scenes, warnings, estimated=False)
-    print(f"[plan] voice {'none (silent)' if args.silent else opts['voice']}, theme {opts['theme']} "
+    print(f"[plan] voice {'none (silent)' if args.silent else opts['voice']}, theme {opts['theme']}, {opts['format']} "
           f"({time.time() - t0:.1f}s)")
 
     parts = []
-    with render.Studio() as studio:
+    with render.Studio(opts["format"]) as studio:
         for i, scene in enumerate(scenes):
             part = work / f"{i + 1:02d}_{render.scene_key(scene)}.mp4"
             if part.exists():
@@ -161,7 +170,7 @@ def cmd_render(args) -> None:
     render.join(parts, silent)
     voice, effects = mix.soundtrack(scenes, work)
     name = args.name or board_path.stem
-    final = out / f"{name}_{opts['theme']}.mp4"
+    final = out / f"{name}_{_tag(opts)}.mp4"
     mix.mux(silent, voice, effects, final, storyboard.get("title", name), scenes)
     for start, title in mix.chapters(scenes):
         print(f"[chapter] {int(start // 60)}:{int(start % 60):02d}  {title}")
@@ -188,6 +197,7 @@ def main(argv=None) -> None:
         p.add_argument("--root", help="folder that file paths in the storyboard are relative to "
                                       "(default: the storyboard's folder)")
         p.add_argument("--theme", choices=["light", "dark"])
+        p.add_argument("--format", choices=["wide", "tall"], help="wide is 1920x1080, tall is 1080x1920")
         p.add_argument("--name", help="output file name without extension")
         p.add_argument("--no-captions", dest="captions", action="store_false", default=None)
 
