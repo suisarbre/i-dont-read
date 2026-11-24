@@ -11,7 +11,7 @@ An agent skill that turns a codebase, a document, or any text into a short narra
 - **Adds sound effects** on scene changes, highlights and reveals. All of them are synthesized in this repo.
 - **One idea per chapter.** Each idea gets its own chapter with a title card and a hard cut, and the mp4 carries real chapter markers.
 - **Length follows the content.** There is no fixed duration.
-- **Changes, pages and PDFs too.** A real git diff, a live web page or a page of a PDF can be the thing on screen, with the camera zooming to text it finds there.
+- **Changes, pages and PDFs too.** A real git diff, a live web page or a page of a PDF can be the thing on screen, with the camera zooming to text it finds there. Asked about a commit or a pull request, it explains what changed, how it worked before, and why, taking the why only from what the author wrote.
 - **Timed to the word.** The voice model reports when each word is spoken, so a highlight can land on a word in the middle of a sentence.
 - **Light and dark themes, wide and tall formats.** 1920×1080 by default, 1080×1920 with `--format tall`.
 - **Video is the whole answer.** No summary under it, no outline to approve. When something is missing on the machine, even the fix arrives as a video.
@@ -51,7 +51,7 @@ python -m idr render  examples/self/storyboard.json --root . --theme dark
 python -m idr voices
 ```
 
-`examples/self` explains this repo with this repo. `examples/showcase` shows a diff, a web page, a PDF, an image and word-timed highlights. `examples/kokoro-onnx` explains [kokoro-onnx](https://github.com/thewh1teagle/kokoro-onnx), the voice library used here; clone that repo and pass it as `--root` (line numbers match its commit `3596b26`, and the render stops with a clear error if they have moved).
+`examples/self` explains this repo with this repo. `examples/showcase` shows a diff, a web page, a PDF, an image and word-timed highlights. `examples/commit` explains one of this repo's own commits (it needs the full git history, so it will not check in a shallow clone). `examples/kokoro-onnx` explains [kokoro-onnx](https://github.com/thewh1teagle/kokoro-onnx), the voice library used here; clone that repo and pass it as `--root` (line numbers match its commit `3596b26`, and the render stops with a clear error if they have moved).
 
 ## When something is missing
 

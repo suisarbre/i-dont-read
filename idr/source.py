@@ -93,12 +93,23 @@ def _rows(raw: list[tuple[str, int | None, int | None, Line, str]]) -> list[dict
             for kind, a, b, tokens, plain in raw]
 
 
-def extract(root: Path, file: str, first: int, last: int) -> list[dict]:
-    """Lines first..last (1-based, inclusive) of a file, as highlighted rows."""
+def _read(root: Path, file: str, ref: str | None, scene: str) -> str:
+    """A file's text: as it is on disk, or as it was at a git ref."""
+    if ref:
+        text = _git_show(root, ref, file)
+        if text is None:
+            raise FileNotFoundError(f"{scene} scene: {file} did not exist at {ref!r}")
+        return text
     path = (root / file).resolve()
     if not path.is_file():
-        raise FileNotFoundError(f"code scene points at a file that does not exist: {file}")
-    text = path.read_text(encoding="utf-8", errors="replace").expandtabs(4)
+        raise FileNotFoundError(f"{scene} scene points at a file that does not exist: {file}")
+    return path.read_text(encoding="utf-8", errors="replace")
+
+
+def extract(root: Path, file: str, first: int, last: int, ref: str | None = None) -> list[dict]:
+    """Lines first..last (1-based, inclusive) of a file, as highlighted rows. `ref` reads it at a git ref."""
+    path = (root / file).resolve()
+    text = _read(root, file, ref, "code").expandtabs(4)
     plain = _split(text)
     if not (1 <= first <= last <= len(plain)):
         raise ValueError(f"{file} has {len(plain)} lines; cannot show lines {first}-{last}")
@@ -179,12 +190,9 @@ def clean(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
-def excerpt(root: Path, file: str, first: int, last: int) -> list[str]:
+def excerpt(root: Path, file: str, first: int, last: int, ref: str | None = None) -> list[str]:
     """Lines first..last of a text file as cleaned paragraphs (blank lines separate paragraphs)."""
-    path = (root / file).resolve()
-    if not path.is_file():
-        raise FileNotFoundError(f"quote scene points at a file that does not exist: {file}")
-    lines = path.read_text(encoding="utf-8", errors="replace").split("\n")
+    lines = _read(root, file, ref, "quote").split("\n")
     if lines and lines[-1] == "":
         lines.pop()
     if not (1 <= first <= last <= len(lines)):

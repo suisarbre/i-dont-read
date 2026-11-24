@@ -95,16 +95,16 @@ A **beat** is one spoken sentence plus what changes on screen when that sentence
 
 | Scene | Use it when | Fields | What a beat can do |
 |---|---|---|---|
-| `code` | The point is in specific lines | `file`, `lines: [first, last]`, `expect` | `highlight`: a line number or `[first, last]` (stays until changed; `null` clears). `note`: a short label beside the highlight |
+| `code` | The point is in specific lines | `file`, `lines: [first, last]`, `expect`, optional `ref` (show the file as it was at a git ref) | `highlight`: a line number or `[first, last]` (stays until changed; `null` clears). `note`: a short label beside the highlight |
 | `diff` | The point is what changed: a commit, a PR, a before and after | `file`, `from` (a git ref), optional `to` (a git ref; default is the file on disk), `lines: [first, last]` in the new file, `expect`. Or `before` and `after`: two file paths | `show`: `"removed"`, `"added"` or `"changed"` lights those lines. `highlight` and `note` as in `code`, by new-file line number |
-| `quote` | The source says it best in its own words | `file`, `lines: [first, last]` | `mark`: a phrase, or a list of phrases, to run a marker over |
+| `quote` | The source says it best in its own words | `file`, `lines: [first, last]`, optional `ref` | `mark`: a phrase, or a list of phrases, to run a marker over |
 | `image` | The source is a picture, a web page or a PDF | `file` (an image, or a PDF with `page`), or `url` (a web address or a local `.html` file; the page is captured as it is now) | `zoom`: move the camera to a region (`null` pulls back). `box`: outline a region (`null` removes it). A region is `{ "find": "exact words on the page" }` for web pages and PDFs, or `[x, y, width, height]` as fractions from 0 to 1 |
 | `flow` | A process, pipeline or sequence of parts | `nodes: [{ "label", "desc" }]` (2 to 6) | `reveal`: how many nodes are visible from now on. `focus`: which node (1-based) gets the ring |
 | `compare` | Two options, or before and after | `columns: [{ "title", "points": [] }, { ... }]` (exactly 2, up to 5 rows) | `reveal`: how many rows are visible from now on |
 | `stats` | The numbers are the story | `items: [{ "value", "label", "note" }]` (1 to 4) | `reveal`: how many cards are visible from now on |
 | `steps` | An ordered list: how to do something, or what you need from the user | `items: [{ "title", "detail", "cmd" }]` (1 to 6; `cmd` shows a command in monospace) | `reveal`: how many steps are visible from now on |
 
-Any beat can also carry `speak` (see section 5) or, with no `say`, a `hold` in seconds.
+Any beat can also carry `speak` (see section 6) or, with no `say`, a `hold` in seconds.
 
 **Timing inside a sentence.** By default a beat's action fires when its sentence starts. To fire it on a word instead, add `"at": "a word or phrase from say"`. To do several things during one sentence, add `cues`, each with its own `at`:
 
@@ -119,9 +119,44 @@ Use this when one sentence walks across several lines or items. It reads far bet
 
 A chapter is usually 1 to 3 scenes. Alternate real source (`code`, `diff`, `quote`, `image`) with an infographic (`flow`, `compare`, `stats`) that puts it in context.
 
-To explain a commit or a pull request, build the chapters from `diff` scenes: one change per chapter, `from` set to the base ref and `to` set to the head ref. The repository must have both refs locally, so fetch them first.
 
-## 5. Writing the narration
+## 5. Explaining a change (a commit, a pull request, a diff)
+
+When the user points at a change instead of a codebase, the video answers four things: what the change is, in one sentence; how it worked before, or what was wrong; what was changed; and what happens now.
+
+**Read first.** Make sure both ends of the change exist locally (fetch the base and the head). Then:
+
+```bash
+git log --format='%h %s%n%b' BASE..HEAD     # what the author said they did, and why
+git diff --stat BASE..HEAD                  # how big it is, and where
+git diff BASE..HEAD                         # the change itself
+```
+
+Read the pull request description and any linked issue too, if you can reach them. Read enough of the surrounding code to know what the changed lines do.
+
+**Sort the change into intents, not files.** One chapter per intent. A pull request that fixes a bug and also renames a module has two intents; a fix that touches four files has one. Renames, formatting and other mechanical edits get one sentence, or nothing.
+
+**Each chapter answers its questions in order**, by the kind of change:
+
+| Kind | The chapter answers, in this order |
+|---|---|
+| Bug fix | What went wrong, as someone using it saw it → where the old code caused it → what was changed → what happens now |
+| New feature | What can be done now that could not be before → where it plugs into the existing code → the new code that matters most → what it does not do yet |
+| Refactor | What behaves exactly as before → what moved or was reshaped → why, if the author says |
+| Removal | What is gone → what replaces it, or what stops working without it |
+
+The first spoken sentence of the video (`intro.say`, or the first chapter's `say`) says what the whole change is, in plain words.
+
+**Where the "why" comes from.** A diff shows what changed, never why. Take the reason only from what the author wrote: commit messages, the pull request description, a linked issue, code comments, tests. If none of them gives a reason, describe what changed and what it does, and leave the motive out. Do not infer a bug that nobody reported.
+
+**Showing before and after.**
+
+- A `diff` scene with `from` set to BASE and `to` set to HEAD is the main scene. Use `"show": "removed"` while describing the old behaviour and `"show": "added"` for the new.
+- To show old code that the diff does not carry (unchanged context, or a function before it was rewritten), use a `code` scene with `"ref": "BASE"`. Its subtitle says which version is on screen.
+- For the size of the change, use a `stats` scene with the numbers from `git diff --stat`, and name that command in `note`.
+- A `compare` scene (before and after) suits a change in behaviour that is easier to say than to show.
+
+## 6. Writing the narration
 
 - One sentence per beat, about 25 words at most. Write it to be heard, not read.
 - Say what the highlighted thing does and why it matters. Never read code aloud.
@@ -131,7 +166,7 @@ To explain a commit or a pull request, build the chapters from `diff` scenes: on
 - Start with the content. No "in this video" and no "let's dive in". End the last chapter on the takeaway.
 - Narration is English only for now. If the user asked for another language, make the video in English and say so in the caption.
 
-## 6. Stay truthful
+## 7. Stay truthful
 
 This is the reason the skill exists, so do not work around it.
 
@@ -142,16 +177,16 @@ This is the reason the skill exists, so do not work around it.
 - Every number in a `stats` scene and every claim in a `compare` scene must come from the source. Put where it came from in `note` when you can.
 - If the source does not say something, the video does not say it either.
 
-## 7. Limits the check enforces
+## 8. Limits the check enforces
 
-- `code` and `diff`: at most 16 lines per scene, and 12 or fewer reads best; in the wide format lines over about 96 columns are cut off (the tall format wraps them). Pick the lines that matter and split long passages into two scenes.
+- `code` and `diff`: at most 16 lines per scene, and 12 or fewer reads best. In the wide format the font shrinks to fit the longest line, so lines over about 120 columns (114 on a diff) make the code too small, and the tall format wraps long lines instead. Pick the lines that matter and split long passages into two scenes.
 - `quote`: at most 640 characters. Quote the paragraph that matters, not the page.
 - `flow` labels: about 12 characters with 5 or 6 nodes, 18 with fewer.
 - `stats` values: at most 10 characters. Put the words in `label`.
 - `steps`: titles and commands at most 48 characters each.
 - Headings: at most 60 characters.
 
-## 8. Settings
+## 9. Settings
 
 - Theme: light by default. If the user asks for dark, add `--theme dark` (or `"theme": "dark"` in the storyboard).
 - Format: wide (1920×1080) by default. If the user wants a vertical video, for a phone or for Shorts, add `--format tall` (1080×1920). The same storyboard works in both; preview it again in the format you will render.
