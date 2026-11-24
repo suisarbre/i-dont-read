@@ -101,6 +101,8 @@ body { font-family: "IDR Sans", sans-serif; -webkit-font-smoothing: antialiased;
 .scene.code .ln.add .sign { color: var(--add-ink); }
 .scene.code .ln.del .sign { color: var(--del-ink); }
 .scene.code .hl { position: absolute; left: 0; right: 0; background: var(--accent-soft); border-left: 7px solid var(--accent); }
+/* On a diff the rows already carry colour, so the highlight is an outline, not a second tint on top of them */
+.scene.code.diff .hl { background: transparent; border: 3px solid var(--accent); border-left-width: 7px; }
 .scene.code .note { position: absolute; background: var(--accent); color: var(--on-accent); font-family: "IDR Sans", sans-serif;
   font-size: 26px; font-weight: 600; padding: 10px 22px; border-radius: 999px; white-space: nowrap; }
 .tok-keyword { color: var(--tok-keyword); }
