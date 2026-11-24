@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Downloaded models (fetched on first run, never committed)
+models/
+*.onnx
+voices-*.bin
+
+# Render output and scratch
+out/
+build/
+*.tmp.mp4
+.DS_Store
