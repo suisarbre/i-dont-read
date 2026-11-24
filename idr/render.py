@@ -38,11 +38,11 @@ class Studio:
 
     def __init__(self, fmt: str = "wide"):
         self.width, self.height = SIZES[fmt]
-        self.missing: set[str] = set()   # characters this machine has no font for
+        self.missing, self.problems = set(), []   # characters with no font here; things that did not fit on screen
 
     def _load(self, scene: Scene) -> None:
         self.page.evaluate("s => window.idr.load(s)", scene.payload)
-        self.missing.update(self.page.evaluate("() => window.idr.missing()"))
+        self._listen(scene)
 
     def __enter__(self):
         self._pw = sync_playwright().start()
@@ -84,6 +84,16 @@ class Studio:
             raise RuntimeError(f"ffmpeg failed while encoding {dest.name}")
         tmp.replace(dest)
         return {"frames": scene.frames, "captured": captured}
+
+    def _listen(self, scene: Scene) -> None:
+        """What the page reports once a scene is laid out: characters it has no font for, and things that did
+        not fit (a formula wider than the frame), as "heading: what"."""
+        self.missing.update(self.page.evaluate("() => window.idr.missing()"))
+        heading = scene.payload.get("heading")
+        name = heading if isinstance(heading, str) else scene.payload.get("type", "scene")
+        for text in self.page.evaluate("() => window.idr.problems()"):
+            if f"{name}: {text}" not in self.problems:
+                self.problems.append(f"{name}: {text}")
 
 
 def join(parts: list[Path], dest: Path) -> None:

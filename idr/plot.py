@@ -109,19 +109,30 @@ class Formula:
             return np.divide(a, b)
         return np.power(a, b)
 
-    def slope(self, x: float, span: float) -> float:
-        """The derivative at x, by a central difference small against the width of the graph."""
-        h = span * 1e-6
-        return float((self(x + h) - self(x - h)) / (2 * h))
+    def area(self, a: float, b: float) -> tuple[float, float]:
+        """The signed area between the curve and the x axis from a to b, and how far off it may be.
 
-    def area(self, a: float, b: float) -> float:
-        """The signed area between the curve and the x axis from a to b (Simpson's rule)."""
-        xs = np.linspace(a, b, 2001)
-        ys = self(xs)
-        if np.isnan(ys).any():
-            return float("nan")
-        h = (b - a) / 2000
-        return float(h / 3 * (ys[0] + ys[-1] + 4 * ys[1:-1:2].sum() + 2 * ys[2:-1:2].sum()))
+        Simpson's rule at three resolutions. A number is only given when they agree: across a pole, or where
+        the curve swings faster than it can be sampled, they do not, and that is an error, not an area.
+        NaN when the formula has no value somewhere in the range."""
+        sums, peaks, total = [], [], 0.0
+        for n in (4096, 16384, 65536):
+            ys = self(np.linspace(a, b, n + 1))
+            if not np.isfinite(ys).all():
+                return float("nan"), 0.0
+            h = (b - a) / n
+            sums.append(float(h / 3 * (ys[0] + ys[-1] + 4 * ys[1:-1:2].sum() + 2 * ys[2:-1:2].sum())))
+            peaks.append(float(np.abs(ys).max()))
+            total = float(np.abs(ys).mean() * (b - a))                    # the area counted without sign
+        # Near a pole the tallest sample keeps growing as the samples close in on it. The sums may even agree
+        # with each other there (evenly spaced samples cancel across 1/x), so this is checked on its own.
+        if peaks[2] > 2.5 * peaks[1] and peaks[1] > 2.5 * peaks[0]:
+            raise ValueError("grows without bound")
+        error = max(abs(sums[2] - sums[1]), abs(sums[1] - sums[0]) / 16)
+        if error > 1e-3 * max(total, 1e-300):
+            raise ValueError("cannot be measured")
+        value = sums[2]
+        return (0.0 if abs(value) < 1e-11 * total else value), error
 
     # ---- LaTeX ---------------------------------------------------------------------------------
 
@@ -179,20 +190,77 @@ def minus(text: str) -> str:
     return text.replace("-", "\u2212")
 
 
+_RAISED = str.maketrans("-0123456789", "⁻⁰¹²³⁴⁵⁶⁷⁸⁹")
+
+
+def _parts(value: float, digits: int) -> tuple[str, int | None]:
+    """A number as (digits to show, power of ten or None): 0.000012 is ("1.2", -5), 42 is ("42", None)."""
+    if value == 0 or not math.isfinite(value):
+        return "0", None
+    power = int(math.floor(math.log10(abs(value))))
+    if -4 <= power < 9:                                    # ordinary size: written out, no exponent
+        text = f"{value:.{max(0, digits - 1 - power)}f}"
+        if "." in text:
+            text = text.rstrip("0").rstrip(".")
+        return ("0" if text in ("-0", "") else text), None
+    lead = f"{value / 10 ** power:.{digits - 1}f}"
+    if abs(float(lead)) >= 10:                             # 9.9996 rounded up to 10.00
+        lead, power = f"{float(lead) / 10:.{digits - 1}f}", power + 1
+    return lead.rstrip("0").rstrip("."), power
+
+
 def number(value: float, digits: int = 4) -> str:
-    """A number as it is written on screen: up to `digits` significant figures, no trailing zeros, no exponent."""
-    if value == 0 or abs(value) < 1e-12:
-        return "0"
-    places = max(0, digits - 1 - int(math.floor(math.log10(abs(value)))))
-    text = f"{value:.{places}f}"
-    if "." in text:
-        text = text.rstrip("0").rstrip(".")
-    return "0" if text in ("-0", "") else text
+    """A number as plain text on screen: up to `digits` significant figures and no trailing zeros. Very large
+    and very small numbers are written with a power of ten (1.2×10⁻⁵) instead of a row of zeros."""
+    lead, power = _parts(value, digits)
+    if power is None:
+        return lead
+    return (f"{lead}×" if lead not in ("1", "-1") else "-" * (lead == "-1")) + "10" + str(power).translate(_RAISED)
 
 
-def rounded(value: float) -> bool:
-    """True when number(value) had to round, so a label should say "about"."""
-    return abs(float(number(value)) - value) > 1e-6 * max(1.0, abs(value))
+def number_tex(value: float, digits: int = 4) -> str:
+    """The same number as LaTeX, for a label typeset as math."""
+    lead, power = _parts(value, digits)
+    if power is None:
+        return lead
+    return (rf"{lead} \times " if lead not in ("1", "-1") else "-" * (lead == "-1")) + f"10^{{{power}}}"
+
+
+def shown(value: float, digits: int = 4) -> float:
+    """The value that number(value) puts on screen."""
+    lead, power = _parts(value, digits)
+    return float(lead) * (10.0 ** power if power is not None else 1.0)
+
+
+def rounded(value: float, error: float = 0.0) -> bool:
+    """True when the number on screen is not the value itself, so a label should say "about": the digits had
+    to be cut, or the value is only known to within `error`."""
+    if value == 0:
+        return False                                        # set to zero on purpose: nothing was cut off
+    gap = abs(shown(value) - value)
+    return gap > max(4 * error, 1e-7 * abs(value)) or error > 1e-6 * max(abs(value), 1e-300)
+
+
+def tidy(value: float, span: float) -> float:
+    """A coordinate kept to a ten-millionth of the range it is drawn in: a fixed number of decimals would
+    flatten a curve whose whole range is a billionth."""
+    if not math.isfinite(value) or not math.isfinite(span) or span <= 0:
+        return value
+    return round(value, 7 - int(math.floor(math.log10(span))))
+
+
+def settled(f, x: float) -> float:
+    """f(x), or 0 when the value is nothing but rounding noise: sin(pi) comes out as 1.2e-16 and changes sign
+    with the last bit of pi, while exp(-50) is a real, tiny number."""
+    y = float(f(x))
+    if y == 0 or not math.isfinite(y):
+        return y
+    near = [float(f(v)) for v in (math.nextafter(x, -math.inf), math.nextafter(x, math.inf),
+                                  math.nextafter(math.nextafter(x, -math.inf), -math.inf),
+                                  math.nextafter(math.nextafter(x, math.inf), math.inf))]
+    if any(v != v for v in near) or max(near + [y]) - min(near + [y]) > 0.5 * abs(y):
+        return 0.0
+    return y
 
 
 def ticks(lo: float, hi: float, about: int = 6) -> list[float]:
@@ -217,10 +285,115 @@ def fixed(value: float) -> str:
     return minus("0.00" if text == "-0.00" else text)
 
 
+def upright(dx: float, dy: float, wide: float, high: float) -> bool:
+    """A direction that is vertical on the graph."""
+    return abs(dx) * high < 1e-7 * abs(dy) * wide
+
+
 def slope_text(dx: float, dy: float, wide: float, high: float) -> str:
-    if abs(dx) * high < 1e-7 * abs(dy) * wide:
+    if upright(dx, dy, wide, high):
         return "vertical"
     return f"slope {fixed(dy / dx)}"
+
+
+def heading(path, s: float, reach: float, wide: float, high: float, lo: float | None = None,
+            hi: float | None = None) -> tuple[float, float, float]:
+    """The direction of the tangent line to a curve at parameter s: (dx, dy, uncertainty of dy/dx).
+
+    `path(s)` gives (x, y); for a function of x it is (x, f(x)). The tangent is the line that chords from the
+    point settle on as they shorten, from either side. It is looked for, not assumed: at a corner or a jump
+    the two sides settle on different lines, and that raises ValueError with the reason instead of drawing
+    one of them. `reach` is the size of s across the graph; `lo` and `hi` are the ends of the curve, if any."""
+    x, y = (float(v) for v in path(s))
+    grain = 1e3 * np.finfo(float).eps
+
+    def chord(h: float):
+        """The chord from the point to path(s + h), in graph units and in screen proportions."""
+        px, py = (float(v) for v in path(s + h))
+        if px != px or py != py:
+            return None
+        dx, dy = (px - x) * math.copysign(1, h), (py - y) * math.copysign(1, h)
+        if abs(dx) <= grain * max(abs(x), abs(px)) and abs(dy) <= grain * max(abs(y), abs(py)):
+            return None                                     # too short to tell from rounding
+        return dx, dy
+
+    def lean(dx: float, dy: float) -> float:
+        """The angle of a line on screen, from 0 to pi."""
+        return math.atan2(dy / high, dx / wide) % math.pi
+
+    def apart(a: float, b: float) -> float:
+        return min(abs(a - b), math.pi - abs(a - b))
+
+    sides = []
+    for sign, end in ((1, hi), (-1, lo)):
+        if end is not None and (end - s) * sign <= 1e-12 * reach:
+            continue                                        # the curve ends here: only one side to look at
+        found = []
+        for k in range(4, 36):
+            h = sign * reach * 2.0 ** -k
+            c = chord(h)
+            if c is None:
+                if found:
+                    break
+                continue
+            found.append((abs(h), c))
+        sides.append(found)
+    if not sides or any(len(found) < 6 for found in sides):
+        raise ValueError("has no tangent")
+
+    def settle(found):
+        """(angle the chords settle on, True if they are still swinging, True if they keep steepening)."""
+        angles = [lean(*c) for _, c in found]
+        steep = [abs(c[1] / high) / max(abs(c[0] / wide), 1e-300) for _, c in found]
+        best = min(range(2, len(found)), key=lambda i: apart(angles[i], angles[i - 1]) + apart(angles[i - 1], angles[i - 2]))
+        swinging = apart(angles[best], angles[best - 1]) > 1e-3
+        tail = steep[max(best - 8, 0): best + 1]
+        rising = len(tail) >= 6 and all(b >= 1.2 * a for a, b in zip(tail, tail[1:]))
+        return angles[best], swinging, rising, found[best], found[best - 1]
+
+    settled_ = [settle(found) for found in sides]
+    if all(side[2] for side in settled_):
+        return 0.0, 1.0, 0.0                                # every side steepens without end: a vertical tangent
+    if any(side[1] for side in settled_):
+        raise ValueError("has no tangent (the curve does not settle on one direction)")
+    if len(settled_) == 2 and apart(settled_[0][0], settled_[1][0]) > 2e-3:
+        if any(side[2] for side in settled_):
+            raise ValueError("has no tangent (the curve jumps)")
+        raise ValueError("has no tangent (the curve has a corner)")
+
+    # The line exists. Its slope, as precisely as the formula allows: central differences, extrapolated.
+    if len(settled_) == 2:
+        best, previous = None, None
+        for k in range(4, 40):
+            h = reach * 2.0 ** -k
+            a, b = path(s + h), path(s - h)
+            d = ((float(a[0]) - float(b[0])) / (2 * h), (float(a[1]) - float(b[1])) / (2 * h))
+            if any(v != v for v in d):
+                break
+            if previous is not None:
+                r = ((4 * d[0] - previous[1][0]) / 3, (4 * d[1] - previous[1][1]) / 3)
+                if previous[0] is not None:
+                    change = math.hypot((r[0] - previous[0][0]) / wide, (r[1] - previous[0][1]) / high)
+                    size = math.hypot(r[0] / wide, r[1] / high)
+                    if best is None or change < best[0]:
+                        best = (change, size, r, previous[0])
+                previous = (r, d)
+            else:
+                previous = (None, d)
+        if best and best[1] > 0 and best[0] <= 1e-3 * best[1]:
+            dx, dy = best[2]
+            if upright(dx, dy, wide, high):
+                return 0.0, 1.0, 0.0
+            if abs(dx) > 0:
+                slope, before = dy / dx, (best[3][1] / best[3][0] if best[3][0] else dy / dx)
+                if abs(lean(dx, dy) - settled_[0][0]) < 0.05 or apart(lean(dx, dy), settled_[0][0]) < 0.05:
+                    return 1.0, slope, abs(slope - before)
+    # At a standstill (a cusp, or a curve that pauses) the differences vanish; the chords still give the line.
+    (_, (dx, dy)), (_, (wx, wy)) = settled_[0][3], settled_[0][4]       # the shortest good chord, and one twice as long
+    if upright(dx, dy, wide, high) or math.cos(settled_[0][0]) ** 2 < 1e-12:
+        return 0.0, 1.0, 0.0
+    near, far = dy / dx, (wy / wx if wx else dy / dx)
+    return 1.0, 2 * near - far, abs(near - far)             # a chord is off by about its length; take that out
 
 
 def view(curves: list[Formula], x0: float, x1: float) -> tuple[float, float]:
@@ -229,18 +402,29 @@ def view(curves: list[Formula], x0: float, x1: float) -> tuple[float, float]:
     return view_of([f(xs) for f in curves])
 
 
-def view_of(heights: list) -> tuple[float, float]:
-    """A y range that shows what the curves do without letting an asymptote flatten everything else."""
+def view_of(heights: list, whole: list | None = None) -> tuple[float, float]:
+    """A y range that shows what the curves do without letting an asymptote flatten everything else.
+
+    `whole` says, per curve, that it stays bounded (see `runs_away`): such a curve is shown top to bottom,
+    however thin its peak. Only a curve that shoots off to infinity is cut, to keep the rest readable."""
     ys = np.concatenate([np.asarray(h, dtype=float) for h in heights])
     ys = ys[np.isfinite(ys)]
     if not len(ys):
         raise ValueError("none of the curves has a value anywhere in the x range")
     lo, hi = float(ys.min()), float(ys.max())
     q1, q3 = (float(v) for v in np.percentile(ys, [25, 75]))
-    body = max(q3 - q1, 1e-9)
+    body = max(q3 - q1, 1e-9 * max(abs(lo), abs(hi), 1e-300))
     lo, hi = max(lo, q1 - 6 * body), min(hi, q3 + 6 * body)             # cut runaway ends, keep ordinary ones whole
-    if hi - lo < 1e-9:
-        lo, hi = lo - 1, hi + 1
+    for h, keep in zip(heights, whole or []):
+        h = np.asarray(h, dtype=float)
+        h = h[np.isfinite(h)]
+        if keep and len(h):
+            lo, hi = min(lo, float(h.min())), max(hi, float(h.max()))
+    if not math.isfinite(hi - lo) or hi - lo > 1e280:
+        raise ValueError("the curves reach values too large to draw over this x range; show a narrower range")
+    if hi - lo < 1e-9 * max(abs(lo), abs(hi), 1e-300) or hi == lo:
+        gap = max(abs(lo), 1.0) if hi == lo else (hi - lo)
+        lo, hi = lo - gap, hi + gap
     pad = (hi - lo) * 0.07
     lo, hi = lo - pad, hi + pad
     if 0 < lo < 0.3 * hi:                                               # close to zero: show the axis
@@ -250,13 +434,81 @@ def view_of(heights: list) -> tuple[float, float]:
     return lo, hi
 
 
+def sampled(path, s0: float, s1: float, x0: float, x1: float, y0: float, y1: float):
+    """Points along a curve, dense enough that the line through them is the curve: (s, x, y, y halfway).
+
+    Between every two samples the curve is looked at again, at three places. If the straight line between
+    the samples misses them, the curve bends faster than the samples can follow, and it is sampled four
+    times as finely. (Halfway alone is not enough: a fast wave can line up with the samples and with the
+    points halfway between them, and look like a slow one at both.) A curve that still cannot be followed (sin(5000 x) across six units) is not drawn at
+    all: joining too few samples of it would draw a slower wave that is not there."""
+    wide, high = x1 - x0, y1 - y0
+    missed = 0.0
+    for count in (SAMPLES, SAMPLES * 4, SAMPLES * 16):
+        ss = np.linspace(s0, s1, count)
+        xs, ys = path(ss)
+        seen = np.isfinite(xs[:-1]) & np.isfinite(xs[1:]) & np.isfinite(ys[:-1]) & np.isfinite(ys[1:])
+        with np.errstate(invalid="ignore"):
+            for a, lo, hi in ((xs[:-1], x0, x1), (xs[1:], x0, x1), (ys[:-1], y0, y1), (ys[1:], y0, y1)):
+                seen &= (a >= lo) & (a <= hi)
+        off = np.zeros(count - 1)
+        my = None
+        for part in (0.5, 0.381966, 0.707107):
+            px, py = path(ss[:-1] + part * (ss[1:] - ss[:-1]))
+            if my is None:
+                my = py
+            with np.errstate(invalid="ignore"):
+                seen &= np.isfinite(px) & np.isfinite(py) & (px >= x0) & (px <= x1) & (py >= y0) & (py <= y1)
+                gap = np.maximum(np.abs(px - (xs[:-1] + part * (xs[1:] - xs[:-1]))) / wide,
+                                 np.abs(py - (ys[:-1] + part * (ys[1:] - ys[:-1]))) / high)
+            off = np.fmax(off, gap)
+        missed = float((off[seen] > 0.004).mean()) if seen.any() else 0.0
+        if missed <= 0.02:
+            break
+    if missed > 0.15:
+        raise ValueError("turns back and forth too fast to be drawn over this range; show a narrower range")
+    return ss, xs, ys, my
+
+
+def runs_away(values, s0: float, s1: float) -> bool:
+    """Whether a curve shoots off without bound somewhere in a range (1/x near 0).
+
+    The tallest sample is looked at more and more closely. Beside a pole it is ten times taller at every closer
+    look; at the top of a peak, however thin, it stops growing once the top is found."""
+    ss = np.linspace(s0, s1, SAMPLES * 8 + 1)
+    grew = still = 0
+    peak = None
+    for _ in range(7):
+        with np.errstate(all="ignore"):
+            ys = np.abs(np.asarray(values(ss), dtype=float))
+        ys = np.where(np.isfinite(ys), ys, -1.0)
+        k = int(ys.argmax())
+        if ys[k] < 0:
+            return False
+        if peak is not None:
+            still = still + 1 if ys[k] <= 1.02 * peak else 0
+            if still == 2:
+                return False                                # two closer looks, no taller: the top has been found
+            grew += ys[k] >= 5 * peak                       # (one look may gain nothing: a sample sat by the pole by luck)
+            if grew == 2:
+                return True
+        peak = float(ys[k])
+        ss = np.linspace(ss[max(k - 1, 0)], ss[min(k + 1, len(ss) - 1)], 201)
+    return False
+
+
 def strokes(f: Formula, x0: float, x1: float, y0: float, y1: float) -> list[list[list[float]]]:
-    """The curve as polylines in data coordinates. A line stops where the formula has no value, and is not
-    drawn across a jump from one side of the view to the other (the two arms of 1/x are separate lines)."""
-    xs = np.linspace(x0, x1, SAMPLES)
-    ys = f(xs)
-    span = y1 - y0
+    """The curve as polylines in data coordinates. A line stops where the formula has no value, is not drawn
+    across a jump from one side of the view to the other (the two arms of 1/x are separate lines), and is
+    not drawn up a step (the treads of floor(x) are separate lines)."""
+    xs, _, ys, halfway = sampled(lambda v: (v, f(v)), x0, x1, x0, x1, y0, y1)
+    if 0 < np.isfinite(ys).sum() < 0.01 * len(ys):
+        raise ValueError("has a value only at scattered points of this range, so there is no curve to draw")
+    wide, span = x1 - x0, y1 - y0
     floor, ceiling = y0 - span, y1 + span
+
+    def dot(x: float, y: float) -> list[float]:
+        return [tidy(x, wide), tidy(min(max(y, floor), ceiling), span)]
 
     def edge(inside: float, outside: float) -> list[float] | None:
         """Where the formula stops having a value, between a sample that has one and a neighbour that has none."""
@@ -267,12 +519,26 @@ def strokes(f: Formula, x0: float, x1: float, y0: float, y1: float) -> list[list
             else:
                 inside = mid
         value = f(inside)
-        return None if math.isnan(value) else [round(inside, 6), round(min(max(value, floor), ceiling), 6)]
+        return None if math.isnan(value) else dot(inside, value)
+
+    def step(left: float, right: float, drop: float):
+        """A jump between two samples: the points on either side of it, or None if the curve only runs steeply."""
+        for _ in range(44):
+            mid = (left + right) / 2
+            value = f(mid)
+            if math.isnan(value):
+                return None
+            if abs(value - f(left)) > abs(value - f(right)):
+                right = mid
+            else:
+                left = mid
+        a, b = f(left), f(right)
+        return (dot(left, a), dot(right, b)) if abs(b - a) > 0.9 * abs(drop) else None
 
     lines: list[list[list[float]]] = []
     current: list[list[float]] = []
     previous = last_x = None
-    for x, y in zip(xs.tolist(), ys.tolist()):
+    for k, (x, y) in enumerate(zip(xs.tolist(), ys.tolist())):
         if math.isnan(y):
             if current and last_x is not None:        # the curve ends between the last sample and this one
                 end = edge(last_x, x)
@@ -286,14 +552,23 @@ def strokes(f: Formula, x0: float, x1: float, y0: float, y1: float) -> list[list
             start = edge(x, last_x)
             if start:
                 current.append(start)
-        last_x = x
         jumped = previous is not None and ((previous > y1 and y < y0) or (previous < y0 and y > y1)
                                            or abs(y - previous) > 2 * span)
+        if previous is not None and not jumped and abs(y - previous) > 0.003 * span:
+            mid = float(halfway[k - 1])
+            if mid == mid and abs(mid - (y + previous) / 2) > 0.4 * abs(y - previous):     # all of the rise is on one side
+                sides = step(last_x, x, y - previous)
+                if sides:
+                    current.append(sides[0])
+                    if len(current) > 1:
+                        lines.append(current)
+                    current = [sides[1]]
+        last_x = x
         if jumped:
             if len(current) > 1:
                 lines.append(current)
             current = []
-        current.append([round(x, 6), round(min(max(y, floor), ceiling), 6)])
+        current.append(dot(x, y))
         previous = y
     if len(current) > 1:
         lines.append(current)
@@ -317,7 +592,10 @@ def constant(value) -> tuple[float, str | None]:
 def pi_ticks(lo: float, hi: float, about: int = 8) -> list[tuple[float, str]]:
     """Positions at round fractions of pi between lo and hi, with labels such as −π/2, π and 3π/2."""
     span = (hi - lo) / math.pi
-    quarter = next((q for q in (1, 2, 4, 8, 16, 32) if span * 4 / q <= about), 64)     # step is quarter × π/4
+    steps = [1, 2, 4, 8] + [4 * m * 10 ** p for p in range(0, 300) for m in (5, 10, 20)]     # in quarters of pi
+    quarter = next((q for q in steps if span * 4 / q <= about), None)                        # step is quarter × π/4
+    if quarter is None:
+        return []
     first = math.ceil(lo / (math.pi / 4 * quarter) - 1e-9)
     out = []
     for k in range(first, first + 400):
@@ -345,7 +623,10 @@ class Function:
         return f"{self.name}(x) = {self.f.tex()}" if self.name else f"y = {self.f.tex()}"
 
     def heights(self, x0: float, x1: float):
-        return self.f(np.linspace(x0, x1, SAMPLES))
+        return self.f(np.linspace(x0, x1, SAMPLES * 8 + 1))
+
+    def bounded(self, x0: float, x1: float) -> bool:
+        return not runs_away(self.f, x0, x1)
 
     def strokes(self, x0, x1, y0, y1):
         return strokes(self.f, x0, x1, y0, y1)
@@ -353,8 +634,9 @@ class Function:
     def at(self, x: float) -> tuple[float, float]:
         return x, self.f(x)
 
-    def direction(self, x: float, span: float) -> tuple[float, float]:
-        return 1.0, self.f.slope(x, span)
+    def direction(self, x: float, wide: float, high: float) -> tuple[float, float, float]:
+        """(dx, dy, uncertainty of the slope) of the tangent at x; ValueError where there is none."""
+        return heading(lambda v: (v, self.f(v)), x, wide, wide, high)
 
 
 class Parametric:
@@ -368,16 +650,18 @@ class Parametric:
     def tex(self) -> str:
         return rf"\left(x,\ y\right) = \left({self.fx.tex()},\ {self.fy.tex()}\right)"
 
-    def _path(self):
-        ts = np.linspace(self.t0, self.t1, SAMPLES)
+    def _at(self, ts):
         return self.fx(ts), self.fy(ts)
 
     def heights(self, x0: float, x1: float):
-        xs, ys = self._path()
+        xs, ys = self._at(np.linspace(self.t0, self.t1, SAMPLES * 8 + 1))
         return ys[(xs >= x0) & (xs <= x1)]
 
+    def bounded(self, x0: float, x1: float) -> bool:
+        return not runs_away(self.fy, self.t0, self.t1)
+
     def strokes(self, x0, x1, y0, y1):
-        xs, ys = self._path()
+        _, xs, ys, _ = sampled(self._at, self.t0, self.t1, x0, x1, y0, y1)
         wide, high = x1 - x0, y1 - y0
         lines, current, previous = [], [], None
         for x, y in zip(xs.tolist(), ys.tolist()):
@@ -390,7 +674,7 @@ class Parametric:
                 if len(current) > 1:
                     lines.append(current)
                 current = []
-            current.append([round(min(max(x, x0 - wide), x1 + wide), 6), round(min(max(y, y0 - high), y1 + high), 6)])
+            current.append([tidy(min(max(x, x0 - wide), x1 + wide), wide), tidy(min(max(y, y0 - high), y1 + high), high)])
             previous = (x, y)
         if len(current) > 1:
             lines.append(current)
@@ -399,9 +683,9 @@ class Parametric:
     def at(self, t: float) -> tuple[float, float]:
         return self.fx(t), self.fy(t)
 
-    def direction(self, t: float, span: float) -> tuple[float, float]:
-        h = (self.t1 - self.t0) * 1e-6
-        return float((self.fx(t + h) - self.fx(t - h)) / (2 * h)), float((self.fy(t + h) - self.fy(t - h)) / (2 * h))
+    def direction(self, t: float, wide: float, high: float) -> tuple[float, float, float]:
+        """(dx, dy, uncertainty of the slope) of the tangent at t; ValueError where there is none."""
+        return heading(self._at, t, self.t1 - self.t0, wide, high, self.t0, self.t1)
 
 
 class Implicit:
@@ -424,6 +708,9 @@ class Implicit:
     def heights(self, x0: float, x1: float):
         return np.array([])
 
+    def bounded(self, x0: float, x1: float) -> bool:
+        return True
+
     def scale(self, x: float, y: float, wide: float, high: float) -> float:
         """How fast the two sides move apart near (x, y): what "close to equal" has to be measured against."""
         gx, gy = self.gradient(x, y, wide, high)
@@ -434,18 +721,88 @@ class Implicit:
         return (float((self.gap(x + hx, y) - self.gap(x - hx, y)) / (2 * hx)),
                 float((self.gap(x, y + hy) - self.gap(x, y - hy)) / (2 * hy)))
 
+    def direction(self, x: float, y: float, wide: float, high: float) -> tuple[float, float, float]:
+        """(dx, dy, uncertainty of the slope) of the tangent at a point on the curve; ValueError where there is
+        none: where the curve crosses itself or stops (no slope on either side of the equation), and at a
+        corner (the equation changes at different rates on the two sides of the point)."""
+        here = float(self.gap(x, y))
+
+        def sided(h: float, along_x: bool) -> tuple[float, float]:
+            ahead = float(self.gap(x + h, y) if along_x else self.gap(x, y + h))
+            behind = float(self.gap(x - h, y) if along_x else self.gap(x, y - h))
+            return (ahead - here) / h, (here - behind) / h
+
+        rates = []
+        for along_x, size in ((True, wide), (False, high)):
+            (a1, b1), (a2, b2) = sided(size * 1e-5, along_x), sided(size * 1e-7, along_x)
+            if any(v != v for v in (a1, b1, a2, b2)):
+                raise ValueError("has no tangent")
+            kink = abs(a2 - b2) * size
+            rates.append((kink, abs(a1 - b1) * size, (abs(a2) + abs(b2)) * size))
+        steepest = max(r[2] for r in rates)
+        for kink, wider, _ in rates:
+            if kink > 1e-3 * steepest and kink > 0.3 * wider:           # the two sides disagree, however close you look
+                raise ValueError("has no tangent (the curve has a corner)")
+        gx, gy = self.gradient(x, y, wide, high)
+        if gx != gx or gy != gy or math.hypot(gx * wide, gy * high) < 1e-9 * max(steepest, 1e-300):
+            raise ValueError("has no tangent")
+        if upright(gy, -gx, wide, high):
+            return 0.0, 1.0, 0.0
+        return 1.0, -gx / gy, abs(gx / gy) * 1e-6
+
     def strokes(self, x0, x1, y0, y1, nx: int = 360, ny: int = 220):
         """The curve as polylines, found by marching squares: walk a grid, and wherever the two sides of the
         equation swap which is larger between neighbouring grid points, the curve passes between them."""
         xs, ys = np.linspace(x0, x1, nx + 1), np.linspace(y0, y1, ny + 1)
         grid = self.gap(xs[None, :], ys[:, None])                      # grid[j, i] at (xs[i], ys[j])
-        finite = np.abs(grid[np.isfinite(grid)])
+        grid = np.broadcast_to(grid, (ny + 1, nx + 1)).astype(float)
+        known = grid[np.isfinite(grid)]
+        finite = np.abs(known)
         if not len(finite):
             return []
         typical = float(np.median(finite))                              # a jump across a pole is far above this
+        # A curve is found where the two sides swap which is larger. Two kinds of equation never show that,
+        # and are refused instead of drawn wrong or left blank:
+        if (known == 0).mean() > 0.02:
+            raise ValueError("holds over a whole region, not along a curve, so there is no curve to draw")
+        if not ((known > 0).any() and (known < 0).any()):
+            if float(finite.min()) <= 1e-3 * max(typical, 1e-300):
+                raise ValueError("has two sides that touch without crossing (as in a square set equal to 0), "
+                                 "which cannot be traced; write the equation without the square")
+            return []
 
-        def cross(a: float, b: float) -> float:
-            return a / (a - b)                                          # where between two grid points the gap is zero
+        def crossings(a, b, at, fixed, along_x: bool):
+            """For grid edges whose ends differ in sign: where on the edge the gap is zero (0 to 1), and whether it
+            really passes through zero there. Halving the edge again and again closes in on a crossing; if the
+            gap stays as far apart as it started, it jumps (a step, or a pole) and there is no curve."""
+            with np.errstate(invalid="ignore"):
+                flips = np.isfinite(a) & np.isfinite(b) & ((a > 0) != (b > 0))
+            where = np.full(a.shape, 0.5)
+            if not flips.any():
+                return flips, where
+            lo, hi = np.zeros(int(flips.sum())), np.ones(int(flips.sum()))
+            start, step = at[0][flips], at[1][flips]
+            other = fixed[flips]
+            ga, gb = a[flips].copy(), b[flips].copy()
+            first = np.abs(ga - gb)
+            for _ in range(10):
+                mid = (lo + hi) / 2
+                pos = start + mid * step
+                gm = self.gap(pos, other) if along_x else self.gap(other, pos)
+                gm = np.where(np.isfinite(gm), gm, np.inf)
+                left = (gm > 0) != (ga > 0)                              # the sign change is in the first half
+                hi, gb = np.where(left, mid, hi), np.where(left, gm, gb)
+                lo, ga = np.where(left, lo, mid), np.where(left, ga, gm)
+            real = np.isfinite(ga) & np.isfinite(gb) & (np.abs(ga - gb) <= 0.5 * first)
+            flips[flips] = real
+            where[flips] = ((lo + hi) / 2)[real]
+            return flips, where
+
+        X, Y = np.meshgrid(xs, ys)
+        dx, dy = xs[1] - xs[0], ys[1] - ys[0]
+        # horizontal edges run from (i, j) to (i + 1, j); vertical ones from (i, j) to (i, j + 1)
+        h_flip, h_at = crossings(grid[:, :-1], grid[:, 1:], (X[:, :-1], np.full((ny + 1, nx), dx)), Y[:, :-1], True)
+        v_flip, v_at = crossings(grid[:-1, :], grid[1:, :], (Y[:-1, :], np.full((ny, nx + 1), dy)), X[:-1, :], False)
 
         ends: dict[tuple, list[float]] = {}                             # a grid edge the curve crosses -> the point
         links: dict[tuple, list[tuple]] = {}
@@ -457,14 +814,14 @@ class Implicit:
                 if min(abs(a), abs(b), abs(c), abs(d)) > typical:
                     continue
                 found = []
-                if (a > 0) != (b > 0):
-                    found.append(("h", i, j, xs[i] + cross(a, b) * (xs[i + 1] - xs[i]), ys[j]))
-                if (b > 0) != (c > 0):
-                    found.append(("v", i + 1, j, xs[i + 1], ys[j] + cross(b, c) * (ys[j + 1] - ys[j])))
-                if (d > 0) != (c > 0):
-                    found.append(("h", i, j + 1, xs[i] + cross(d, c) * (xs[i + 1] - xs[i]), ys[j + 1]))
-                if (a > 0) != (d > 0):
-                    found.append(("v", i, j, xs[i], ys[j] + cross(a, d) * (ys[j + 1] - ys[j])))
+                if h_flip[j, i]:
+                    found.append(("h", i, j, xs[i] + h_at[j, i] * dx, ys[j]))
+                if v_flip[j, i + 1]:
+                    found.append(("v", i + 1, j, xs[i + 1], ys[j] + v_at[j, i + 1] * dy))
+                if h_flip[j + 1, i]:
+                    found.append(("h", i, j + 1, xs[i] + h_at[j + 1, i] * dx, ys[j + 1]))
+                if v_flip[j, i]:
+                    found.append(("v", i, j, xs[i], ys[j] + v_at[j, i] * dy))
                 if len(found) == 4:                                     # a saddle: pair the crossings by the centre's sign
                     centre = (a + b + c + d) / 4
                     found = [found[0], found[1], found[2], found[3]] if (centre > 0) == (a > 0) \
@@ -472,7 +829,7 @@ class Implicit:
                 for k in range(0, len(found) - 1, 2):
                     p, q = found[k], found[k + 1]
                     for one, other in ((p, q), (q, p)):
-                        ends[one[:3]] = [round(float(one[3]), 6), round(float(one[4]), 6)]
+                        ends[one[:3]] = [tidy(float(one[3]), x1 - x0), tidy(float(one[4]), y1 - y0)]
                         links.setdefault(one[:3], []).append(other[:3])
         lines, seen = [], set()
         # Open lines first (they start at a crossing with one neighbour), then closed loops.

@@ -498,6 +498,16 @@
       eqs.every(e => e.row.scrollWidth <= e.row.clientWidth + 4 && clearTag(e.row));
     sheet.style.fontSize = `${font}px`;
     while (font > 26 && !fits()) { font -= 2; sheet.style.fontSize = `${font}px`; }
+    eqs.forEach((e, n) => {
+      if (e.row.scrollWidth > e.row.clientWidth + 4) {
+        problem(`formula ${n + 1} is wider than the frame even at the smallest size, so its end is cut off; ` +
+          'break it over two lines (two formulas) or two scenes');
+      }
+    });
+    if (top + sheet.getBoundingClientRect().height > G.bottom + 1) {
+      problem('the formulas are taller than the frame even at the smallest size, so the last ones are cut off; ' +
+        'show fewer per scene');
+    }
     enter(sheet, t0 + 0.05, 34, 0.6);
 
     // A marked term's box is the union of what is drawn inside it: glyphs, fraction bars and SVG (root signs,
@@ -536,7 +546,8 @@
       if (op.op === 'reveal') { const e = eqs[op.line]; e.a.o.to(op.t, 1, 0.4); e.a.y.to(op.t, 0, 0.45); }
       else if (op.op === 'mark') {
         if (op.id === null) Object.values(marks).forEach(m => m.to(op.t, 0, 0.3));
-        else marks[op.id].to(op.t, 1, 0.6, easeInOut);
+        else if (marks[op.id]) marks[op.id].to(op.t, 1, 0.6, easeInOut);
+        else problem('a marked term could not be found in the typeset formula, so it is not highlighted');
       } else if (op.op === 'note') {
         if (op.text) note.show(op.t, op.text, op.id !== null && op.id !== undefined ? rects[op.id] : whole, 'below', words, whole.y + whole.h);
         else note.hide(op.t);
@@ -641,6 +652,10 @@
     let font = tall ? 34 : 38;                         // the legend stays on one line where it can
     legend.style.fontSize = `${font}px`;
     while (font > 22 && legend.scrollWidth > legend.clientWidth + 1) { font -= 2; legend.style.fontSize = `${font}px`; }
+    if (legend.scrollWidth > legend.clientWidth + 1) {
+      problem('the formulas of the curves do not fit on one line above the graph, so the last is cut off; ' +
+        'draw fewer curves in this scene or write them shorter');
+    }
     const room = G.bottom - top - legend.getBoundingClientRect().height - (scene.credit ? 46 : 0);
     const H = Math.round(Math.min(room, tall ? W * 0.92 : room));
     const NS = 'http://www.w3.org/2000/svg';
@@ -652,7 +667,9 @@
     };
     const svg = make('svg', { class: 'graph', width: W, height: H, viewBox: `0 0 ${W} ${H}` }, wrap);
     if (scene.credit) wrap.appendChild(el('div', 'credit', scene.credit));
-    const m = { l: tall ? 84 : 104, r: 44, t: 44, b: 62 };
+    // The left margin holds the y axis's numbers: wider when they are long (−2.5×10⁻⁵), as far as a fifth of the graph.
+    const longest = Math.max(0, ...scene.yticks.map(([, text]) => String(text).length));
+    const m = { l: Math.min(Math.max(tall ? 84 : 104, 34 + longest * 15), Math.round(W * 0.2)), r: 44, t: 44, b: 62 };
     let pw = W - m.l - m.r, ph = H - m.t - m.b;
     const [x0, x1] = scene.x, [y0, y1] = scene.y;
     if (scene.equal) {                                 // one unit is as long across as it is up: a circle is round
@@ -903,9 +920,15 @@
     return img.decode().catch(() => { throw new Error(`could not load image ${scene.src}`); });
   };
 
+  // Things a builder could not fit on screen. They come back to the command line as warnings: a storyboard can
+  // pass every check and still be too wide or too tall once it is laid out with real fonts.
+  let problems = [];
+  const problem = text => { problems.push(text); };
+
   window.idr = {
+    problems() { return problems; },
     async load(scene) {
-      tracks = []; windows = []; styled = []; last = null;
+      tracks = []; windows = []; styled = []; last = null; problems = [];
       G = FORMATS[scene.format] || FORMATS.wide;
       const html = document.documentElement;
       html.dataset.theme = scene.theme || 'light';

@@ -52,13 +52,21 @@ class Formulas(unittest.TestCase):
 
     def test_slope_and_area(self):
         f = plot.Formula("x^2")
-        self.assertAlmostEqual(f.slope(2.0, 6.0), 4.0, places=6)
-        self.assertAlmostEqual(f.area(0.0, 2.0), 8 / 3, places=9)
-        self.assertTrue(math.isnan(plot.Formula("1/x").area(-1.0, 1.0)))
+        dx, dy, unsure = plot.Function("x^2").direction(2.0, 6.0, 9.0)
+        self.assertAlmostEqual(dy / dx, 4.0, places=9)
+        self.assertLess(unsure, 1e-8)
+        area, unsure = f.area(0.0, 2.0)
+        self.assertAlmostEqual(area, 8 / 3, places=9)
+        self.assertLess(unsure, 1e-9)
+        self.assertTrue(math.isnan(plot.Formula("1/x").area(-1.0, 1.0)[0]))      # a sample lands on the pole
 
     def test_numbers(self):
-        self.assertEqual([plot.number(v) for v in (4.0, 8 / 3, -0.5, 1234.5678, 0.000123456, -1e-15)],
+        self.assertEqual([plot.number(v) for v in (4.0, 8 / 3, -0.5, 1234.5678, 0.000123456, 0.0)],
                          ["4", "2.667", "-0.5", "1235", "0.0001235", "0"])
+        # too large or too small for a row of zeros: a power of ten, as text and as LaTeX
+        self.assertEqual([plot.number(v) for v in (1.9287e-22, -2.5e12, 1e-9, 3e300)],
+                         ["1.929\u00d710\u207b\u00b2\u00b2", "-2.5\u00d710\u00b9\u00b2", "10\u207b\u2079", "3\u00d710\u00b3\u2070\u2070"])
+        self.assertEqual(plot.number_tex(1.9287e-22), r"1.929 \times 10^{-22}")
         self.assertFalse(plot.rounded(4.0 - 1e-11))
         self.assertTrue(plot.rounded(8 / 3))
 

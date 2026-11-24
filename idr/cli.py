@@ -74,8 +74,10 @@ def _report(scenes: list, warnings: list[str], estimated: bool) -> float:
     return total
 
 
-def _fonts(missing: set[str]) -> None:
-    """Say so when the machine cannot draw some of the characters on screen."""
+def _fonts(missing: set[str], problems: list[str] = ()) -> None:
+    """Say so when the machine cannot draw some of the characters on screen, or something did not fit."""
+    for text in problems:
+        print(f"warning: {text}")
     if missing:
         shown = " ".join(sorted(missing)[:24])
         print(f"warning: this machine has no font for {len(missing)} character(s) on screen: {shown}\n"
@@ -158,7 +160,7 @@ def cmd_preview(args) -> None:
             for k, (t, path) in enumerate(zip(times, paths), 1):
                 step = f"  ·  {k} of {len(times)}" if len(times) > 1 else ""
                 shots.append((path, f"scene {i}{step}  ·  {t:.1f}s"))
-        _fonts(studio.missing)
+        _fonts(studio.missing, studio.problems)
     name = args.name or board_path.stem
     across, (w, h) = (4, (480, 854)) if opts["format"] == "tall" else (2, (960, 540))
     per = across * (1 if opts["format"] == "tall" else 3)
@@ -219,7 +221,7 @@ def cmd_render(args) -> None:
                 print(f"[film] scene {i + 1} ({scene.payload['type']}): {scene.duration:.1f}s, "
                       f"{stats['captured']}/{stats['frames']} frames captured, {time.time() - t1:.1f}s")
             parts.append(part)
-        _fonts(studio.missing)
+        _fonts(studio.missing, studio.problems)
     for stale in work.glob("[0-9][0-9]_*.mp4"):           # scene files from earlier versions of the storyboard
         if stale not in parts:
             stale.unlink()

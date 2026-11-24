@@ -657,6 +657,55 @@ def _notes(scene: Scene, clock: _Clock, beat: dict, state: dict) -> None:
         state["noted"] = False
 
 
+def _in_command(tex: str, at: int) -> str | None:
+    """The command name that position `at` falls inside (the "a" of \\frac), or None."""
+    start = at
+    while start > 0 and tex[start - 1].isalpha():
+        start -= 1
+    slashes = 0
+    while start - slashes > 0 and tex[start - slashes - 1] == "\\":
+        slashes += 1
+    if slashes % 2 == 0:                                   # none, or a row break (\\\\) followed by ordinary letters
+        return None
+    end = at
+    while end < len(tex) and tex[end].isalpha():
+        end += 1
+    return tex[start - 1:end] if end > start else None
+
+
+def _term_spots(tex: str, piece: str) -> tuple[list[int], str | None]:
+    """Where a piece of LaTeX occurs as a term of its own: not starting or ending in the middle of a command
+    name. Returns the positions, and a command one of the rejected matches was inside (for the error)."""
+    spots, inside, at = [], None, tex.find(piece)
+    while at >= 0:
+        end = at + len(piece)
+        cut = (_in_command(tex, at) if piece[0].isalpha() else None) or \
+              (_in_command(tex, end) if piece[-1].isalpha() and end < len(tex) and tex[end].isalpha() else None)
+        if cut:
+            inside = inside or cut
+        else:
+            spots.append(at)
+        at = tex.find(piece, at + 1)
+    return spots, inside
+
+
+def _top_level(tex: str, tokens: tuple[str, ...]) -> bool:
+    """Whether any of the tokens appears outside every pair of braces."""
+    depth, i = 0, 0
+    while i < len(tex):
+        if tex[i] == "\\" and i + 1 < len(tex):
+            if depth == 0 and tex[i:i + 2] in tokens:
+                return True
+            i += 2
+            continue
+        depth += tex[i] == "{"
+        depth -= tex[i] == "}"
+        if depth == 0 and tex[i] in tokens:
+            return True
+        i += 1
+    return False
+
+
 def _math(b: _Builder, spec: dict, kicker: str) -> Scene:
     where = spec.get("heading") or "math"
     if spec.get("file"):
@@ -676,6 +725,9 @@ def _math(b: _Builder, spec: dict, kicker: str) -> Scene:
     if not 1 <= len(blocks) <= MAX_MATH_LINES:
         raise StoryboardError(f"{where}: a math scene shows 1 to {MAX_MATH_LINES} formulas, not {len(blocks)}; "
                               "split it into two scenes")
+    for n, block in enumerate(blocks, 1):
+        if not isinstance(block, str) or not block.strip():
+            raise StoryboardError(f'{where}: formula {n} is {block!r}; each formula is a string of LaTeX, such as "a^2 + b^2 = c^2"')
 
     # Marks: a piece of one formula's LaTeX, wrapped in \htmlClass so the player can highlight it.
     spans: dict[int, list[tuple[int, int, int]]] = {i: [] for i in range(len(blocks))}
@@ -684,27 +736,58 @@ def _math(b: _Builder, spec: dict, kicker: str) -> Scene:
         value = act.get("mark")
         if not value:
             continue
+        if not isinstance(value, (dict, list)):
+            raise StoryboardError(f'{where}: "mark" takes {{"line": 1, "tex": "a piece of that formula"}}, or a list of '
+                                  f'them (null clears the marks); not {value!r}')
         for item in [value] if isinstance(value, dict) else value:
-            line, piece = int(item.get("line", 1)), item.get("tex", "")
-            if not 1 <= line <= len(blocks):
-                raise StoryboardError(f"{where}: mark line {line} is not one of the {len(blocks)} formulas")
-            at = blocks[line - 1].find(piece) if piece else -1
-            if at < 0:
+            if not isinstance(item, dict) or not isinstance(item.get("tex"), str) or not item["tex"].strip():
+                raise StoryboardError(f'{where}: a mark is {{"line": 1, "tex": "a piece of that formula"}}; not {item!r}')
+            line, piece, nth = item.get("line", 1), item["tex"], item.get("nth", 1)
+            if isinstance(line, bool) or not isinstance(line, int) or not 1 <= line <= len(blocks):
+                raise StoryboardError(f"{where}: mark line {line!r} is not one of the {len(blocks)} formulas")
+            if isinstance(nth, bool) or not isinstance(nth, int) or nth < 1:
+                raise StoryboardError(f'{where}: a mark\'s "nth" is 1 for the first place the piece occurs, 2 for the second')
+            block = blocks[line - 1]
+            if piece not in block:
                 raise StoryboardError(f"{where}: mark {piece!r} is not in formula {line}; copy it exactly from the LaTeX")
             if not texmath.balanced(piece):
                 raise StoryboardError(f"{where}: mark {piece!r} is not a whole piece of LaTeX (its braces do not pair "
                                       "up); mark a complete term")
-            if any(s < at + len(piece) and at < e for s, e, _ in spans[line - 1]):
-                raise StoryboardError(f"{where}: mark {piece!r} overlaps an earlier mark")
-            mid = sum(len(v) for v in spans.values())
-            spans[line - 1].append((at, at + len(piece), mid))
+            if _top_level(piece, ("&", "\\\\")):
+                raise StoryboardError(f"{where}: mark {piece!r} runs across rows or columns (it has & or \\\\ in it), "
+                                      "which would change the formula; mark the part in one cell")
+            spots, inside = _term_spots(block, piece)
+            if not spots:
+                raise StoryboardError(f"{where}: mark {piece!r} is only found inside the command {inside} in formula "
+                                      f"{line}, not as a term of its own; mark a longer piece that contains it")
+            if nth > len(spots):
+                raise StoryboardError(f"{where}: mark {piece!r} occurs {len(spots)} time(s) in formula {line}, so there "
+                                      f'is no "nth": {nth}')
+            at = spots[nth - 1]
+            if block[:at].rstrip().endswith(("^", "_")):
+                whole_group = piece.startswith("{") and texmath.balanced(piece[1:-1]) and piece.endswith("}") \
+                    and not _top_level(piece[1:-1] + "}", ("}",))
+                if not (len(piece) == 1 or whole_group or re.fullmatch(r"\\[A-Za-z]+", piece)):
+                    raise StoryboardError(f"{where}: mark {piece!r} starts in an exponent or subscript and runs past "
+                                          "it; mark the whole exponent or subscript, or a term outside it")
+            same = next((mid for s, e, mid in spans[line - 1] if (s, e) == (at, at + len(piece))), None)
+            if same is None and any(s < at + len(piece) and at < e for s, e, _ in spans[line - 1]):
+                raise StoryboardError(f"{where}: mark {piece!r} overlaps another mark on formula {line}; marks may "
+                                      "repeat the same term, but not share part of one")
+            mid = same if same is not None else sum(len(v) for v in spans.values())
+            if same is None:
+                spans[line - 1].append((at, at + len(piece), mid))
             ids.setdefault(id(act), []).append((mid, line - 1))
     shown = []
     for i, tex in enumerate(blocks):
         for s, e, mid in sorted(spans[i], reverse=True):
-            tex = f"{tex[:s]}\\htmlClass{{idr-m{mid}}}{{{tex[s:e]}}}{tex[e:]}"
+            wrapped = f"\\htmlClass{{idr-m{mid}}}{{{tex[s:e]}}}"
+            if tex[:s].rstrip().endswith(("^", "_")):       # x^2: the exponent must stay one group
+                wrapped = "{" + wrapped + "}"
+            tex = f"{tex[:s]}{wrapped}{tex[e:]}"
         shown.append(tex)
-        b.tex.append({"where": f"{where} formula {i + 1}", "tex": tex, "display": True, "seg": None, "strict": True})
+        b.tex.append({"where": f"{where} formula {i + 1}", "tex": tex, "display": True, "seg": None, "strict": True,
+                      "plain": blocks[i], "marks": [blocks[i][s:e] for s, e, _ in spans[i]]})
 
     scene = b.scene("math", kicker, {**spec, "sub": sub}, sub_is_source=from_source, blocks=shown, source=from_source)
     scene.sfx.append((0.0, "whoosh"))
@@ -866,15 +949,25 @@ def _check_math(b: _Builder) -> list[str]:
     is shown as the plain text it is in the source (so the screen still shows only what is there) and warned about."""
     if not b.tex:
         return []
-    errors = texmath.validate([(x["tex"], x["display"]) for x in b.tex])
+    marked = [x for x in b.tex if x.get("marks")]
+    errors = texmath.validate([(x["tex"], x["display"]) for x in b.tex] + [(x["plain"], x["display"]) for x in marked])
     if errors is None:
         b.warn("math", "no browser could be started to check the LaTeX; mistakes will show as red text")
         return []
+    plain_ok = {id(x): not error for x, error in zip(marked, errors[len(b.tex):])}
     problems = []
     for item, error in zip(b.tex, errors):
+        refused = _NOT_SHOWN.search(item["tex"]) if isinstance(item["tex"], str) else None
+        if not error and refused:
+            error = f"{refused.group(0)} is not something a formula in a video may contain"
         if not error:
             continue
-        if item["strict"]:
+        if item["strict"] and plain_ok.get(id(item)):       # the formula is fine; a mark on it is what breaks it
+            pieces = ", ".join(repr(m) for m in item["marks"])
+            problems.append(f"{item['where']}: a mark cannot be highlighted on its own ({pieces}): it is not a "
+                            f"complete term of the formula. Mark a whole term, such as a full \\left( ... \\right) "
+                            f"pair or a full fraction. (KaTeX said: {error})")
+        elif item["strict"]:
             problems.append(f"{item['where']}: LaTeX error: {error}")
         else:
             b.warn(item["where"], f"{item['seg']['raw']!r} is not valid LaTeX ({error}); it is shown as plain text")
@@ -886,6 +979,8 @@ def _check_math(b: _Builder) -> list[str]:
 
 
 MOVE_STEPS = 96     # positions worked out along the way when a point travels
+# Commands KaTeX only draws as red error text here (they need trust), or that would restyle the page.
+_NOT_SHOWN = re.compile(r"\\(?:href|url|includegraphics|htmlId|htmlStyle|htmlData)(?![A-Za-z])")
 
 
 def _plot(b: _Builder, spec: dict, kicker: str) -> Scene:
@@ -944,18 +1039,21 @@ def _plot(b: _Builder, spec: dict, kicker: str) -> Scene:
     if spec.get("y"):
         y0, y1, y_pi = span(spec["y"], '"y"', "[-2, 2]")
     else:
-        heights = [h for shape in shapes for h in [shape.heights(x0, x1)] if len(h)]
-        if not heights:
+        seen = [(h, shape.bounded(x0, x1)) for shape in shapes for h in [shape.heights(x0, x1)] if len(h)]
+        if not seen:
             fail('with only equations to draw, say which part of the y axis to show: "y": [from, to]')
         try:
-            y0, y1 = plot.view_of(heights)
+            y0, y1 = plot.view_of([h for h, _ in seen], [whole for _, whole in seen])
         except ValueError as problem:
             fail(str(problem))
     wide, high = x1 - x0, y1 - y0
 
     curves = []
     for n, shape in enumerate(shapes, 1):
-        lines = shape.strokes(x0, x1, y0, y1)
+        try:
+            lines = shape.strokes(x0, x1, y0, y1)
+        except ValueError as problem:
+            fail(f"{shape.text!r} {problem}")
         if not any(x0 <= px <= x1 and y0 <= py <= y1 for line in lines for px, py in line):
             fail(f'{shape.text!r} is never inside the graph (x from {plot.number(x0)} to {plot.number(x1)}, '
                  f'y from {plot.number(y0)} to {plot.number(y1)}); change "x" or "y"')
@@ -999,26 +1097,45 @@ def _plot(b: _Builder, spec: dict, kicker: str) -> Scene:
             fail(f"{what} at ({plot.number(px)}, {plot.number(py)}) is outside the graph; change \"x\" or \"y\" to include it")
         return float(px), float(py), float(param), written
 
-    def heading_of(i: int, px: float, py: float, param: float) -> tuple[float, float]:
-        """The direction the curve runs at a point, as (dx, dy)."""
+    def heading_of(i: int, px: float, py: float, param: float) -> tuple[float, float, float]:
+        """The direction of the tangent at a point, as (dx, dy), and how uncertain the slope dy/dx is.
+        The curve classes look for the tangent instead of assuming one: a corner, a jump or a crossing has none."""
         shape = shapes[i]
-        if shape.kind == "implicit":
-            gx, gy = shape.gradient(px, py, wide, high)
-            dx, dy = gy, -gx
-        else:
-            dx, dy = shape.direction(param, wide)
+        try:
+            if shape.kind == "implicit":
+                dx, dy, unsure = shape.direction(px, py, wide, high)
+            else:
+                dx, dy, unsure = shape.direction(param, wide, high)
+        except ValueError as problem:
+            fail(f"{shape.text!r} {problem} at ({plot.number(px)}, {plot.number(py)})")
         if dx != dx or dy != dy or (abs(dx) < 1e-12 and abs(dy) < 1e-12):
             fail(f"{shape.text!r} has no tangent at ({plot.number(px)}, {plot.number(py)})")
-        return float(dx), float(dy)
+        if not plot.upright(dx, dy, wide, high):
+            slope = dy / dx
+            if unsure > 1e-3 * max(abs(slope), 1e-6 * high / wide):
+                fail(f"the slope of {shape.text!r} at ({plot.number(px)}, {plot.number(py)}) cannot be worked out "
+                     "reliably (the curve changes too fast there)")
+            if abs(slope) <= 4 * unsure:
+                dy = 0.0                                    # a slope of 1e-17 is zero with rounding noise on it
+        return float(dx), float(dy), float(unsure)
 
-    def slope_tex(dx: float, dy: float) -> str:
-        if abs(dx) * high < 1e-7 * abs(dy) * wide:
+    def slope_tex(dx: float, dy: float, unsure: float) -> str:
+        if plot.upright(dx, dy, wide, high):
             return r"\text{vertical}"
         slope = dy / dx
-        return rf"\text{{slope}} {r'\approx' if plot.rounded(slope) else '='} {plot.number(slope)}"
+        return rf"\text{{slope}} {r'\approx' if plot.rounded(slope, unsure) else '='} {plot.number_tex(slope)}"
 
     def point_tex(px: float, py: float, written: str | None) -> str:
-        return rf"\left({written or plot.number(px)},\ {plot.number(py)}\right)"
+        return rf"\left({written or plot.number_tex(px)},\ {plot.number_tex(py)}\right)"
+
+    def quiet(i: int, param: float, px: float, py: float) -> tuple[float, float]:
+        """The point as it is labelled: a coordinate that is only rounding noise (sin(pi) = 1.2e-16) is zero."""
+        shape = shapes[i]
+        if shape.kind == "function":
+            return px, plot.settled(shape.f, param)
+        if shape.kind == "parametric":
+            return plot.settled(shape.fx, param), plot.settled(shape.fy, param)
+        return px, py
 
     marks: list[dict] = []
     owner: dict[int, list[tuple[str, int]]] = {}
@@ -1028,11 +1145,15 @@ def _plot(b: _Builder, spec: dict, kicker: str) -> Scene:
     for act in _actions(spec):
         for kind in ("point", "tangent", "shade", "move"):
             value = act.get(kind)
-            if not value:
+            if value is None or value == []:
                 continue
+            example = {"point": '{"x": 1}', "tangent": '{"x": 1}', "shade": '{"from": 0, "to": 2}',
+                       "move": '{"from": -2, "to": 2}'}[kind]
+            if not isinstance(value, (dict, list)) or value == {}:
+                fail(f'"{kind}" takes an object such as {example}, or a list of them (null clears it); not {value!r}')
             for item in [value] if isinstance(value, dict) else value:
-                if not isinstance(item, dict):
-                    fail(f'"{kind}" takes an object such as {{"x": 1}}, or a list of them')
+                if not isinstance(item, dict) or not item:
+                    fail(f'"{kind}" takes an object such as {example}, or a list of them; not {item!r}')
                 i = on_curve(item, f"a {kind}")
                 shape = shapes[i]
                 if kind == "shade":
@@ -1042,15 +1163,21 @@ def _plot(b: _Builder, spec: dict, kicker: str) -> Scene:
                         fail('"shade" needs "from" and "to", two x values')
                     lo, hi, _ = span([item["from"], item["to"]], '"shade"', '{"from": 0, "to": 2}')
                     place(i, {"x": lo}, "the shaded area"), place(i, {"x": hi}, "the shaded area")
-                    area = shape.f.area(lo, hi)
+                    between = f"between x = {plot.number(lo)} and {plot.number(hi)}"
+                    try:
+                        area, unsure = shape.f.area(lo, hi)
+                    except ValueError as problem:
+                        reason = ("the curve shoots off without bound inside that range, so there is no area to measure" if "bound" in str(problem)
+                                  else "it jumps or swings too fast there for the area to be measured")
+                        fail(f"the area under {shape.text!r} {between} cannot be shown: {reason}")
                     if area != area:
-                        fail(f"{shape.text!r} has no value somewhere between x = {plot.number(lo)} and "
-                             f"{plot.number(hi)}, so there is no area to shade")
+                        fail(f"{shape.text!r} has no value somewhere {between}, so there is no area to shade")
                     xs = [lo + (hi - lo) * k / 160 for k in range(161)]
                     ys = [min(max(v, y0), y1) for v in shape.f(xs).tolist()]
-                    sign = r"\approx" if plot.rounded(area) else "="
-                    marks.append({"kind": "shade", "curve": i, "outline": [[round(a, 6), round(v, 6)] for a, v in zip(xs, ys)],
-                                  "tex": label(rf"\text{{area}} {sign} {plot.number(area)}", "area")})
+                    sign = r"\approx" if plot.rounded(area, unsure) else "="
+                    marks.append({"kind": "shade", "curve": i,
+                                  "outline": [[plot.tidy(a, wide), plot.tidy(v, high)] for a, v in zip(xs, ys)],
+                                  "tex": label(rf"\text{{area}} {sign} {plot.number_tex(area)}", "area")})
                     owner.setdefault(id(act), []).append((kind, len(marks) - 1))
                 elif kind == "move":
                     if shape.kind == "implicit":
@@ -1065,8 +1192,8 @@ def _plot(b: _Builder, spec: dict, kicker: str) -> Scene:
                     for k in range(MOVE_STEPS + 1):
                         at = start + (stop - start) * k / MOVE_STEPS
                         px, py, param, _ = place(i, {key: at}, "the travelling point", key)
-                        dx, dy = heading_of(i, px, py, param) if item.get("tangent") else (0.0, 0.0)
-                        steps.append([round(px, 6), round(py, 6), dx, dy,
+                        dx, dy, _ = heading_of(i, px, py, param) if item.get("tangent") else (0.0, 0.0, 0.0)
+                        steps.append([plot.tidy(px, wide), plot.tidy(py, high), dx, dy,
                                       f"({plot.fixed(px)}, {plot.fixed(py)})",
                                       plot.slope_text(dx, dy, wide, high) if item.get("tangent") else ""])
                     marks.append({"kind": "move", "curve": i, "steps": steps, "tangent": bool(item.get("tangent"))})
@@ -1078,24 +1205,37 @@ def _plot(b: _Builder, spec: dict, kicker: str) -> Scene:
                     px, py, param, written = place(i, item, f"the {kind}")
                     if kind == "point":
                         marks.append({"kind": "point", "curve": i, "x": px, "y": py,
-                                      "tex": label(point_tex(px, py, written), "point")})
+                                      "tex": label(point_tex(*quiet(i, param, px, py), written), "point")})
                     else:
-                        dx, dy = heading_of(i, px, py, param)
+                        dx, dy, unsure = heading_of(i, px, py, param)
                         marks.append({"kind": "tangent", "curve": i, "x": px, "y": py, "dx": dx, "dy": dy,
-                                      "tex": label(slope_tex(dx, dy), "slope")})
+                                      "tex": label(slope_tex(dx, dy, unsure), "slope")})
                     owner.setdefault(id(act), []).append((kind, len(marks) - 1))
 
-    def axis_ticks(lo: float, hi: float, about: int, in_pi: bool, choice) -> list[list]:
+    def axis_ticks(lo: float, hi: float, about: int, in_pi: bool, choice, across: bool = False) -> list[list]:
         if choice not in (None, "pi", "numbers"):
             fail('"xticks" and "yticks" are "pi" or "numbers"')
         if choice == "pi" or (in_pi and choice != "numbers"):
-            return [[v, text] for v, text in plot.pi_ticks(lo, hi, about)]
-        return [[v, plot.minus(plot.number(v))] for v in plot.ticks(lo, hi, about)]
+            marks_ = [[v, text] for v, text in plot.pi_ticks(lo, hi, about)]
+            if len(marks_) >= 2:                            # a range too small for two marks in pi gets numbers
+                return marks_
+        room = (115 if is_wide else 62) if across else 10 ** 6       # characters that fit along the x axis
+        for fewer in (about, max(about // 2, 3), 3, 2):
+            for digits in (4, 6, 8, 10):                    # 100000001 and 100000002 need more than four digits
+                marks_ = [[v, plot.minus(plot.number(v, digits))] for v in plot.ticks(lo, hi, fewer)]
+                if len({text for _, text in marks_}) == len(marks_):
+                    break
+            if sum(len(text) + 3 for _, text in marks_) <= room:
+                break
+        if len({text for _, text in marks_}) < len(marks_):
+            fail(f"the axis from {lo!r} to {hi!r} is too short for how far it is from "
+                 "zero: its marks would all read the same. Shift the formula so the range starts near zero")
+        return marks_
 
     is_wide = b.fmt == "wide"
     on = _math_on(b, spec)
     scene = b.scene("plot", kicker, spec, x=[x0, x1], y=[y0, y1], curves=curves, marks=marks, equal=bool(spec.get("equal")),
-                    xticks=axis_ticks(x0, x1, 10 if is_wide else 6, x_pi, spec.get("xticks")),
+                    xticks=axis_ticks(x0, x1, 10 if is_wide else 6, x_pi, spec.get("xticks"), across=True),
                     yticks=axis_ticks(y0, y1, 7 if is_wide else 9, y_pi, spec.get("yticks")),
                     xlabel=spec.get("xlabel", "x"), ylabel=spec.get("ylabel", "y"),
                     credit=b.rich(spec.get("source"), on, where))
@@ -1239,7 +1379,13 @@ def build(storyboard: dict, root: Path, theme: str, narrator, captions: bool = T
             except KeyError as missing:
                 problems.append(f"chapter {n}, {spec['type']} scene: missing field {missing}")
             except (ValueError, FileNotFoundError) as problem:      # report every scene's problem in one run
-                problems.append(str(problem))
+                named = isinstance(problem, (StoryboardError, FileNotFoundError))
+                problems.append(str(problem) if named else f"{spec.get('heading') or spec['type']}: {problem}")
+            except (TypeError, AttributeError, OverflowError, ZeroDivisionError) as problem:
+                # A field holds the wrong kind of value (a number where a list belongs). Say which scene, not a traceback.
+                problems.append(f"chapter {n}, {spec.get('heading') or spec['type']} ({spec['type']} scene): a field has "
+                                f"the wrong kind of value ({type(problem).__name__}: {problem}); compare the scene with "
+                                "its fields in SKILL.md section 4")
     problems += _check_math(b)
     if problems:
         raise StoryboardError("\nerror: ".join(problems))
