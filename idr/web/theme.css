@@ -163,6 +163,36 @@ body { font-family: "IDR Sans", sans-serif; -webkit-font-smoothing: antialiased;
   border: 1.5px solid var(--line); border-radius: 12px; padding: 14px 22px;
   font-variant-ligatures: none; font-feature-settings: "liga" 0, "calt" 0; }
 
+/* Math inside any text: KaTeX sized to the text around it */
+.katex { font-size: 1.08em; }
+.katex-display { margin: 0.2em 0; }
+
+/* Formulas */
+.scene.math .heading, .scene.table .heading { font-size: 50px; margin-top: 10px; }
+.scene.math .sub, .scene.table .sub { margin-top: 8px; }
+.scene.math .sheet { position: absolute; left: var(--padX); right: var(--padX); background: var(--panel); border: 1.5px solid var(--line);
+  border-radius: 22px; padding: 40px 56px; display: flex; flex-direction: column; gap: 0.35em; }
+.scene.math .sheet.source { border-left: 8px solid var(--accent); }
+.scene.math .eq { overflow: hidden; position: relative; z-index: 1; }
+.scene.math .mk { position: absolute; z-index: 0; background: var(--marker); border-radius: 10px; }
+.scene.math .eq .katex-display { margin: 0; }
+.scene.math .eq .katex { font-size: 1em; }
+.scene.math > .note, .scene.table > .note { position: absolute; background: var(--accent); color: var(--on-accent);
+  font-size: 26px; font-weight: 600; padding: 10px 22px; border-radius: 999px; white-space: nowrap; }
+
+/* Tables */
+.scene.table .tablewrap { position: absolute; left: var(--padX); right: var(--padX); }
+.scene.table .tablewrap.source table { border-left: 8px solid var(--accent); }
+.scene.table table { width: 100%; border-collapse: separate; border-spacing: 0; background: var(--panel);
+  border: 1.5px solid var(--line); border-radius: 22px; overflow: hidden; }
+.scene.table th, .scene.table td { padding: 0.62em 0.95em; border-top: 1.5px solid var(--line); vertical-align: middle; line-height: 1.3; }
+.scene.table th { border-top: none; font-family: "IDR Serif", serif; font-weight: 500; color: var(--accent); }
+.scene.table th .tx { font-size: 1.15em; }   /* on the text, so header and body cells share the same padding */
+.scene.table td { font-variant-numeric: tabular-nums; }
+.scene.table .hlbox { position: absolute; border: 4px solid var(--accent); background: var(--accent-soft); border-radius: 12px;
+  pointer-events: none; opacity: 0; }
+.scene.table .credit { font-size: 24px; color: var(--mute); margin-top: 14px; }
+
 /* A real picture with a camera */
 .scene.image .frame { position: absolute; left: var(--padX); overflow: hidden; border-radius: 18px; border: 1.5px solid var(--line);
   background: var(--panel); }
@@ -181,7 +211,9 @@ body { font-family: "IDR Sans", sans-serif; -webkit-font-smoothing: antialiased;
 [data-format="tall"] .scene.title { padding-bottom: 420px; }
 [data-format="tall"] .scene.title .heading { font-size: 92px; max-width: none; }
 [data-format="tall"] .scene.title .sub { font-size: 38px; max-width: none; }
-[data-format="tall"] .scene.code .heading, [data-format="tall"] .scene.quote .heading, [data-format="tall"] .scene.image .heading { font-size: 50px; }
+[data-format="tall"] .scene.code .heading, [data-format="tall"] .scene.quote .heading, [data-format="tall"] .scene.image .heading,
+[data-format="tall"] .scene.math .heading, [data-format="tall"] .scene.table .heading { font-size: 50px; }
+[data-format="tall"] .scene.math .sheet { padding: 36px 36px; }
 [data-format="tall"] .scene.code .ln { white-space: pre-wrap; }
 [data-format="tall"] .scene.code .ln .src { overflow: visible; overflow-wrap: anywhere; min-width: 0; }
 [data-format="tall"] .scene.code .note { font-size: 28px; }

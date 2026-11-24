@@ -17,6 +17,8 @@ from pygments.lexers import TextLexer, get_lexer_for_filename
 from pygments.token import Comment, Keyword, Name, Number, Operator, String
 from pygments.util import ClassNotFound
 
+from . import texmath
+
 # Pygments token type -> theme class (see theme.css). Most specific first.
 _CLASSES = [
     (Comment, "tok-comment"),
@@ -211,9 +213,18 @@ def clean(text: str) -> str:
         if len(part) >= 2 and part[0] == part[-1] == "`":
             out.append(part[1:-1])
             continue
-        part = re.sub(r"(\*\*|__)", "", part)                       # bold markers
-        out.append(re.sub(r"(?<!\w)[*_](?=\S)|(?<=\S)[*_](?!\w)", "", part))   # emphasis markers
+        pos = 0                                                      # math spans keep every character too
+        for start, end, _, _ in texmath.spans(part):
+            out.append(_unmark(part[pos:start]))
+            out.append(part[start:end])
+            pos = end
+        out.append(_unmark(part[pos:]))
     return re.sub(r"\s+", " ", "".join(out)).strip()
+
+
+def _unmark(part: str) -> str:
+    part = re.sub(r"(\*\*|__)", "", part)                           # bold markers
+    return re.sub(r"(?<!\w)[*_](?=\S)|(?<=\S)[*_](?!\w)", "", part)     # emphasis markers
 
 
 def excerpt(root: Path, file: str, first: int, last: int, ref: str | None = None,
@@ -245,3 +256,129 @@ def excerpt(root: Path, file: str, first: int, last: int, ref: str | None = None
     if not paragraphs:
         raise ValueError(f"{file} lines {first}-{last} contain no text")
     return paragraphs
+
+
+# --- math --------------------------------------------------------------------
+
+_ENVS = r"equation|align|alignat|flalign|gather|multline|eqnarray"
+_BLOCK = re.compile(r"\$\$(.+?)\$\$|\\\[(.+?)\\\]|(\\begin\{(" + _ENVS + r")\*?\}.*?\\end\{\4\*?\})", re.S)
+_LABEL = re.compile(r"\\label\{[^{}]*\}")
+
+
+def _range(root: Path, file: str, first: int, last: int, ref, encoding, scene: str) -> list[str]:
+    lines = _read(root, file, ref, scene, encoding).split("\n")
+    if lines and lines[-1] == "":
+        lines.pop()
+    if not (1 <= first <= last <= len(lines)):
+        raise ValueError(f"{file} has {len(lines)} lines; cannot show lines {first}-{last}")
+    return lines[first - 1:last]
+
+
+def display_math(root: Path, file: str, first: int, last: int, ref: str | None = None,
+                 encoding: str | None = None) -> tuple[list[str], str]:
+    """Display-math blocks that lie wholly inside lines first..last, as written, plus the first line (for `expect`).
+
+    Blocks are $$...$$ and \\[...\\] (LaTeX or Markdown) and equation-like environments (LaTeX). The only
+    change made is dropping \\label{...}, a cross-reference name that is never printed.
+    """
+    lines = _range(root, file, first, last, ref, encoding, "math")
+    text = "\n".join(lines)
+    blocks = []
+    for m in _BLOCK.finditer(text):
+        tex = m.group(3) or (m.group(1) if m.group(1) is not None else m.group(2))
+        blocks.append(_LABEL.sub("", tex).strip())
+    rest = _BLOCK.sub("", text)
+    if re.search(r"\$\$|\\\[|\\begin\{(" + _ENVS + r")", rest):
+        raise ValueError(f"{file} lines {first}-{last}: a math block starts in this range but ends after it; "
+                         "widen the range to its end")
+    if not blocks:
+        raise ValueError(f'{file} lines {first}-{last} hold no display math ($$...$$, \\[...\\] or an equation '
+                         'environment). If the source writes the formula as plain text, use a math scene with '
+                         '"tex" instead: that is an explanation, and is shown as one')
+    return blocks, lines[0]
+
+
+# --- tables ------------------------------------------------------------------
+
+_SEPARATOR = re.compile(r"^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$")
+
+
+def _table_cells(line: str) -> list[str]:
+    """Split one Markdown table row on pipes that are not escaped and not inside a code span."""
+    body = line.strip()
+    if body.startswith("|"):
+        body = body[1:]
+    if body.endswith("|") and not body.endswith("\\|"):
+        body = body[:-1]
+    cells, cur, code, i = [], "", False, 0
+    while i < len(body):
+        c = body[i]
+        if c == "\\" and i + 1 < len(body) and body[i + 1] == "|":
+            cur += "|"
+            i += 2
+            continue
+        if c == "`":
+            code = not code
+        if c == "|" and not code:
+            cells.append(cur)
+            cur = ""
+        else:
+            cur += c
+        i += 1
+    cells.append(cur)
+    return [clean(c) for c in cells]
+
+
+def md_table(root: Path, file: str, first: int, last: int, ref: str | None = None,
+             encoding: str | None = None) -> tuple[list[str], list[str | None], list[list[str]], str]:
+    """A Markdown pipe table in lines first..last: header, column alignments, data rows, and the first line."""
+    lines = _range(root, file, first, last, ref, encoding, "table")
+    rows = [line for line in lines if line.strip()]
+    if len(rows) < 2 or not _SEPARATOR.match(rows[1]) or "|" not in rows[0]:
+        raise ValueError(f"{file} lines {first}-{last} do not start with a Markdown table (a header row, then a "
+                         "row of dashes like |---|---|); start the range on the header row")
+    for line in rows[2:]:
+        if "|" not in line:
+            raise ValueError(f"{file} lines {first}-{last}: {line.strip()[:40]!r} is not a table row; "
+                             "end the range on the table's last row")
+    header = _table_cells(rows[0])
+    aligns = []
+    for spec in _table_cells(rows[1]):
+        s = spec.strip()
+        aligns.append("center" if s.startswith(":") and s.endswith(":") else
+                      "right" if s.endswith(":") else "left" if s.startswith(":") else None)
+    data = []
+    for line in rows[2:]:
+        cells = _table_cells(line)
+        data.append((cells + [""] * len(header))[:len(header)])
+    return header, (aligns + [None] * len(header))[:len(header)], data, lines[0]
+
+
+def csv_table(root: Path, file: str, first: int, last: int, columns: list | None = None, ref: str | None = None,
+              encoding: str | None = None) -> tuple[list[str], list[list[str]]]:
+    """Data rows first..last (1-based, after the header) of a CSV or TSV file, with chosen columns in the chosen order."""
+    import csv
+    import io
+    text = _read(root, file, ref, "table", encoding)
+    table = [row for row in csv.reader(io.StringIO(text), delimiter="\t" if file.lower().endswith(".tsv") else ",")
+             if any(cell.strip() for cell in row)]
+    if not table:
+        raise ValueError(f"{file} is empty")
+    header, body = [c.strip() for c in table[0]], table[1:]
+    if not (1 <= first <= last <= len(body)):
+        raise ValueError(f"{file} has {len(body)} data rows; cannot show rows {first}-{last}")
+    if columns:
+        pick = []
+        for col in columns:
+            if isinstance(col, int):
+                if not 1 <= col <= len(header):
+                    raise ValueError(f"{file} has {len(header)} columns; there is no column {col}")
+                pick.append(col - 1)
+            elif col in header:
+                pick.append(header.index(col))
+            else:
+                raise ValueError(f"{file} has no column {col!r}; its columns are {', '.join(header)}")
+    else:
+        pick = list(range(len(header)))
+    rows = [[(row[i] if i < len(row) else "").strip() for i in pick] for row in body[first - 1:last]]
+    return [header[i] for i in pick], rows

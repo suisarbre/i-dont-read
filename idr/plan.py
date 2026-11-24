@@ -12,7 +12,7 @@ from pathlib import Path
 
 import numpy as np
 
-from . import picture, source
+from . import picture, source, texmath
 
 FPS = 30
 LEAD = 0.9        # entrance animation before the first beat
@@ -30,8 +30,12 @@ MAX_CODE_LINES = 16
 MAX_CODE_COLS = 120   # the font shrinks to fit the longest line; past this it is too small to read
 MAX_QUOTE_CHARS = 640
 MAX_SAY_CHARS = 260
+MAX_MATH_LINES = 4
+MAX_TABLE_COLS = 6
+MAX_TABLE_ROWS = 8
+MAX_CELL_CHARS = 40
 
-_CODE_LIKE = re.compile(r"[_\\<>{}\[\]=]|\w/\w|\w\(\)|\.(py|js|ts|json|md|cpp|hpp|h|rs|go|java|html|css|sh)\b")
+_CODE_LIKE = re.compile(r"[_\\<>{}\[\]=$^]|\w/\w|\w\(\)|\.(py|js|ts|json|md|cpp|hpp|h|rs|go|java|html|css|sh)\b")
 _NOT_ACTIONS = {"say", "speak", "hold", "cues", "at"}
 
 
@@ -105,16 +109,39 @@ class _Builder:
         self.root, self.theme, self.narrator, self.captions, self.fmt = root, theme, narrator, captions, fmt
         self.warnings: list[str] = []
         self.noted: set[str] = set()
+        self.math_default = True
+        self.tex: list[dict] = []      # every LaTeX expression on screen, checked with KaTeX once all scenes are built
+
+    def rich(self, value, on: bool, where: str):
+        """Text that may hold $...$ math: the string itself, or segments [{"text"} | {"tex", "display", "raw"}]."""
+        if not isinstance(value, str) or not value or not on:
+            return value
+        found = texmath.spans(value)
+        if not found:
+            return texmath.unescape(value)
+        segs, pos = [], 0
+        for start, end, tex, display in found:
+            if start > pos:
+                segs.append({"text": texmath.unescape(value[pos:start])})
+            seg = {"tex": tex, "display": display, "raw": value[start:end]}
+            self.tex.append({"where": where, "tex": tex, "display": display, "seg": seg, "strict": False})
+            segs.append(seg)
+            pos = end
+        if pos < len(value):
+            segs.append({"text": texmath.unescape(value[pos:])})
+        return segs
 
     def warn(self, where: str, message: str) -> None:
         self.warnings.append(f"{where}: {message}")
 
-    def scene(self, kind: str, kicker, spec: dict, **extra) -> Scene:
+    def scene(self, kind: str, kicker, spec: dict, sub_is_source: bool = False, **extra) -> Scene:
         heading = spec.get("heading")
         if heading and len(heading) > 60:
             self.warn(heading[:30] + "...", "heading is over 60 characters and may wrap badly")
-        return Scene({"type": kind, "theme": self.theme, "format": self.fmt, "kicker": kicker, "heading": heading,
-                      "sub": spec.get("sub"), "ops": [], **extra})
+        on, where = _math_on(self, spec), heading or kind
+        sub = spec.get("sub") if sub_is_source else self.rich(spec.get("sub"), on, where)
+        return Scene({"type": kind, "theme": self.theme, "format": self.fmt, "kicker": kicker,
+                      "heading": self.rich(heading, on, where), "sub": sub, "ops": [], **extra})
 
 
 class _Clock:
@@ -203,6 +230,10 @@ class _Stage:
             self.scene.payload["ops"].append({"op": "reveal", "t": at, self.key: item})
             self.scene.sfx.append((at, "pop"))
         self.visible = max(self.visible, n)
+
+
+def _math_on(b: "_Builder", spec: dict) -> bool:
+    return bool(spec.get("math", b.math_default))
 
 
 def _actions(spec: dict):
@@ -302,7 +333,7 @@ def _code(b: _Builder, spec: dict, kicker: str) -> Scene:
     rows = source.extract(b.root, spec["file"], first, last, spec.get("ref"), spec.get("encoding"))
     _expect(spec, rows, where)
     _check_rows(b, rows, where)
-    scene = b.scene("code", kicker, {**spec, "sub": _where(spec, first, last)}, rows=rows)
+    scene = b.scene("code", kicker, {**spec, "sub": _where(spec, first, last)}, sub_is_source=True, rows=rows)
     scene.sfx.append((0.0, "whoosh"))
     _lines(b, scene, spec, where, {first + i: i for i in range(len(rows))})
     return scene
@@ -315,7 +346,7 @@ def _diff(b: _Builder, spec: dict, kicker: str) -> Scene:
     rows, label = source.diff(b.root, spec, first, last)
     _expect(spec, rows, where)
     _check_rows(b, rows, where)
-    scene = b.scene("diff", kicker, {**spec, "sub": label}, rows=rows)
+    scene = b.scene("diff", kicker, {**spec, "sub": label}, sub_is_source=True, rows=rows)
     scene.sfx.append((0.0, "whoosh"))
     _lines(b, scene, spec, where, {int(row["b"]): i for i, row in enumerate(rows) if row["b"]})
     return scene
@@ -353,20 +384,36 @@ def _quote(b: _Builder, spec: dict, kicker: str) -> Scene:
                 raise StoryboardError(f"{where}: mark {phrase!r} is not in the quoted text; "
                                       "marks must be copied exactly from the source")
 
+    # Split each paragraph where a mark or a $...$ span starts or ends. A mark may hold whole math spans,
+    # but may not cut one: what is highlighted must be what the reader sees.
+    on = _math_on(b, spec)
     segments, lengths = [], {}
     for para, spans in zip(paragraphs, found):
-        parts, pos = [], 0
-        for s, e, mid in sorted(spans):
-            if s > pos:
-                parts.append({"text": para[pos:s]})
-            parts.append({"text": para[s:e], "mark": mid})
+        maths = texmath.spans(para) if on else []
+        for s, e, mid in spans:
+            for ms, me, _, _ in maths:
+                if s < me and ms < e and not (s <= ms and me <= e):
+                    raise StoryboardError(f"{where}: mark {para[s:e]!r} cuts the math {para[ms:me]!r}; mark the "
+                                          "whole expression with its $ signs, or only text outside it")
             lengths[mid] = e - s
-            pos = e
-        if pos < len(para):
-            parts.append({"text": para[pos:]})
+        cuts = sorted({0, len(para), *(x for s, e, _ in spans for x in (s, e)),
+                       *(x for ms, me, _, _ in maths for x in (ms, me))})
+        parts = []
+        for a, z in zip(cuts, cuts[1:]):
+            mark = next((mid for s, e, mid in spans if s <= a and z <= e), None)
+            math = next((m for m in maths if m[0] == a and m[1] == z), None)
+            if math:
+                part = {"tex": math[2], "display": math[3], "raw": para[a:z]}
+                b.tex.append({"where": where, "tex": math[2], "display": math[3], "seg": part, "strict": False})
+            else:
+                part = {"text": texmath.unescape(para[a:z]) if on else para[a:z]}
+            if mark is not None:
+                part["mark"] = mark
+            parts.append(part)
         segments.append(parts)
 
-    scene = b.scene("quote", kicker, {**spec, "sub": _where(spec, first, last)}, paragraphs=segments)
+    scene = b.scene("quote", kicker, {**spec, "sub": _where(spec, first, last)}, sub_is_source=True,
+                    paragraphs=segments)
     scene.sfx.append((0.0, "whoosh"))
     clock = _Clock(b, scene, where)
     for beat in spec.get("beats", []):
@@ -417,6 +464,8 @@ def _flow(b: _Builder, spec: dict, kicker: str) -> Scene:
     for node in nodes:
         if len(node["label"]) > limit:
             b.warn(where, f"node label {node['label']!r} is over {limit} characters and may wrap")
+    on = _math_on(b, spec)
+    nodes = [{**nd, "label": b.rich(nd["label"], on, where), "desc": b.rich(nd.get("desc"), on, where)} for nd in nodes]
     scene = b.scene("flow", kicker, spec, nodes=nodes)
     scene.sfx.append((0.0, "whoosh"))
     _reveals(b, scene, spec, where, len(nodes), "node", focus=True)
@@ -435,6 +484,9 @@ def _compare(b: _Builder, spec: dict, kicker: str) -> Scene:
         for point in c["points"]:
             if len(point) > 80:
                 b.warn(where, f"point {point[:30]!r}... is over 80 characters")
+    on = _math_on(b, spec)
+    columns = [{**c, "title": b.rich(c["title"], on, where), "points": [b.rich(p, on, where) for p in c["points"]]}
+               for c in columns]
     scene = b.scene("compare", kicker, spec, columns=columns)
     scene.sfx.append((0.0, "whoosh"))
     _reveals(b, scene, spec, where, rows, "row")
@@ -449,6 +501,9 @@ def _stats(b: _Builder, spec: dict, kicker: str) -> Scene:
     for item in items:
         if len(item["value"]) > 10:
             b.warn(where, f"value {item['value']!r} is over 10 characters; move words into the label")
+    on = _math_on(b, spec)
+    items = [{**it, "label": b.rich(it.get("label"), on, where), "note": b.rich(it.get("note"), on, where)}
+             for it in items]
     scene = b.scene("stats", kicker, spec, items=items)
     scene.sfx.append((0.0, "whoosh"))
     _reveals(b, scene, spec, where, len(items), "item")
@@ -465,6 +520,9 @@ def _steps(b: _Builder, spec: dict, kicker: str) -> Scene:
             b.warn(where, f"step title {item['title'][:30]!r}... is over 48 characters")
         if len(item.get("cmd") or "") > 48:
             b.warn(where, f"command {item['cmd'][:30]!r}... is over 48 characters and may not fit")
+    on = _math_on(b, spec)
+    items = [{**it, "title": b.rich(it["title"], on, where), "detail": b.rich(it.get("detail"), on, where)}
+             for it in items]
     scene = b.scene("steps", kicker, spec, items=items)
     scene.sfx.append((0.0, "whoosh"))
     _reveals(b, scene, spec, where, len(items), "item")
@@ -547,7 +605,7 @@ def _image(b: _Builder, spec: dict, kicker: str) -> Scene:
     camera = view(None)
     views: list[list[float]] = []                       # every framing this scene uses
     boxes: list[list[list[float]]] = []
-    scene = b.scene("image", kicker, {**spec, "sub": spec.get("sub") or pic["label"]},
+    scene = b.scene("image", kicker, {**spec, "sub": spec.get("sub") or pic["label"]}, sub_is_source=not spec.get("sub"),
                     src=pic["path"].as_uri(), iw=pic["iw"], ih=pic["ih"], stamp=pic["stamp"], boxes=boxes)
     ops = scene.payload["ops"]
     scene.sfx.append((0.0, "whoosh"))
@@ -581,9 +639,207 @@ def _image(b: _Builder, spec: dict, kicker: str) -> Scene:
     return scene
 
 
+def _notes(scene: Scene, clock: _Clock, beat: dict, state: dict) -> None:
+    """A note belongs to its sentence: a new sentence with no note takes the last one down."""
+    if state.get("noted") and not beat.get("note"):
+        scene.payload["ops"].append({"op": "note", "t": clock.started, "text": None})
+        state["noted"] = False
+
+
+def _math(b: _Builder, spec: dict, kicker: str) -> Scene:
+    where = spec.get("heading") or "math"
+    if spec.get("file"):
+        first, last = spec["lines"]
+        where = f"{spec['file']}:{first}-{last}"
+        blocks, first_line = source.display_math(b.root, spec["file"], first, last, spec.get("ref"), spec.get("encoding"))
+        if spec.get("expect") and spec["expect"] not in first_line:
+            raise StoryboardError(f"{where}: line {first} is {first_line.strip()[:60]!r}, not the expected "
+                                  f"{spec['expect']!r}; the file has changed, so fix the line range")
+        sub, from_source = _where(spec, first, last), True
+    elif spec.get("tex"):
+        blocks = [spec["tex"]] if isinstance(spec["tex"], str) else list(spec["tex"])
+        sub, from_source = spec.get("sub"), False
+    else:
+        raise StoryboardError(f'{where}: a math scene needs "tex" (formulas written for the video) or "file" and '
+                              '"lines" (formulas from the source)')
+    if not 1 <= len(blocks) <= MAX_MATH_LINES:
+        raise StoryboardError(f"{where}: a math scene shows 1 to {MAX_MATH_LINES} formulas, not {len(blocks)}; "
+                              "split it into two scenes")
+
+    # Marks: a piece of one formula's LaTeX, wrapped in \htmlClass so the player can highlight it.
+    spans: dict[int, list[tuple[int, int, int]]] = {i: [] for i in range(len(blocks))}
+    ids: dict[int, list[tuple[int, int]]] = {}
+    for act in _actions(spec):
+        value = act.get("mark")
+        if not value:
+            continue
+        for item in [value] if isinstance(value, dict) else value:
+            line, piece = int(item.get("line", 1)), item.get("tex", "")
+            if not 1 <= line <= len(blocks):
+                raise StoryboardError(f"{where}: mark line {line} is not one of the {len(blocks)} formulas")
+            at = blocks[line - 1].find(piece) if piece else -1
+            if at < 0:
+                raise StoryboardError(f"{where}: mark {piece!r} is not in formula {line}; copy it exactly from the LaTeX")
+            if not texmath.balanced(piece):
+                raise StoryboardError(f"{where}: mark {piece!r} is not a whole piece of LaTeX (its braces do not pair "
+                                      "up); mark a complete term")
+            if any(s < at + len(piece) and at < e for s, e, _ in spans[line - 1]):
+                raise StoryboardError(f"{where}: mark {piece!r} overlaps an earlier mark")
+            mid = sum(len(v) for v in spans.values())
+            spans[line - 1].append((at, at + len(piece), mid))
+            ids.setdefault(id(act), []).append((mid, line - 1))
+    shown = []
+    for i, tex in enumerate(blocks):
+        for s, e, mid in sorted(spans[i], reverse=True):
+            tex = f"{tex[:s]}\\htmlClass{{idr-m{mid}}}{{{tex[s:e]}}}{tex[e:]}"
+        shown.append(tex)
+        b.tex.append({"where": f"{where} formula {i + 1}", "tex": tex, "display": True, "seg": None, "strict": True})
+
+    scene = b.scene("math", kicker, {**spec, "sub": sub}, sub_is_source=from_source, blocks=shown, source=from_source)
+    scene.sfx.append((0.0, "whoosh"))
+    ops = scene.payload["ops"]
+    clock = _Clock(b, scene, where)
+    stage = _Stage(scene, len(blocks), "line", _staged(spec))
+    state, last_mark = {}, None
+    for beat in spec.get("beats", []):
+        timed = clock.beat(beat)
+        _notes(scene, clock, beat, state)
+        for t, act, src in timed:
+            if "reveal" in act:
+                stage.upto(act["reveal"], t)
+            if "mark" in act and act["mark"] is None:
+                ops.append({"op": "mark", "t": t, "id": None})
+                last_mark = None
+            for j, (mid, line) in enumerate(ids.get(id(src), [])):
+                if line >= stage.visible:
+                    b.warn(where, f"a mark is on formula {line + 1} before it is revealed")
+                at = round(t + 0.1 + j * 0.45, 3)
+                ops.append({"op": "mark", "t": at, "id": mid})
+                scene.sfx.append((at, "mark"))
+                last_mark = mid
+            if act.get("note"):
+                ops.append({"op": "note", "t": round(t + 0.15, 3), "text": act["note"], "id": last_mark})
+                state["noted"] = True
+    stage.upto(len(blocks), clock.t)
+    clock.finish()
+    return scene
+
+
+def _numeric(cell: str) -> bool:
+    return bool(re.fullmatch(r"[-+−~≈]?[\d][\d,]*(\.\d+)?\s*(%|x|×|ms|s|MB|KB|GB|bpc|bits?)?", cell.strip()))
+
+
+def _table(b: _Builder, spec: dict, kicker: str) -> Scene:
+    where = spec.get("heading") or "table"
+    aligns, credit, from_source = None, None, True
+    if spec.get("file"):
+        name = spec["file"]
+        at_ref = f"  ·  as of {spec['ref']}" if spec.get("ref") else ""
+        if name.lower().endswith((".csv", ".tsv")):
+            if "rows" not in spec:
+                raise StoryboardError(f'{name}: a CSV table takes "rows": [first, last] (data rows, after the header)')
+            first, last = spec["rows"]
+            where = f"{name} rows {first}-{last}"
+            header, rows = source.csv_table(b.root, name, first, last, spec.get("columns"), spec.get("ref"),
+                                            spec.get("encoding"))
+            if spec.get("expect") and spec["expect"] not in ",".join(header):
+                raise StoryboardError(f"{where}: the header is {', '.join(header)!r}, not the expected {spec['expect']!r}")
+            sub = f"{name}  ·  {f'row {first}' if first == last else f'rows {first}–{last}'}{at_ref}"
+        else:
+            first, last = spec["lines"]
+            where = f"{name}:{first}-{last}"
+            header, aligns, rows, first_line = source.md_table(b.root, name, first, last, spec.get("ref"),
+                                                               spec.get("encoding"))
+            if spec.get("expect") and spec["expect"] not in first_line:
+                raise StoryboardError(f"{where}: line {first} is {first_line.strip()[:60]!r}, not the expected "
+                                      f"{spec['expect']!r}; the file has changed, so fix the line range")
+            sub = _where(spec, first, last)
+    elif "header" in spec and "rows" in spec:
+        header, rows = [str(h) for h in spec["header"]], [[str(c) for c in row] for row in spec["rows"]]
+        for n, row in enumerate(rows, 1):
+            if len(row) != len(header):
+                raise StoryboardError(f"{where}: row {n} has {len(row)} cells but the header has {len(header)}")
+        sub, credit, from_source = spec.get("sub"), spec.get("source"), False
+    else:
+        raise StoryboardError(f'{where}: a table scene needs "header" and "rows" (a table written for the video), '
+                              'or "file" with "lines" (a Markdown table) or "rows" (a CSV file)')
+    if not 1 <= len(header) <= MAX_TABLE_COLS:
+        raise StoryboardError(f"{where}: a table shows 1 to {MAX_TABLE_COLS} columns, not {len(header)}")
+    if not 1 <= len(rows) <= MAX_TABLE_ROWS:
+        raise StoryboardError(f"{where}: a table shows 1 to {MAX_TABLE_ROWS} rows, not {len(rows)}; split it")
+    if b.fmt == "tall" and len(header) > 4:
+        b.warn(where, f"{len(header)} columns are cramped in the tall format; show 4 or fewer")
+    for cell in [*header, *(c for row in rows for c in row)]:
+        if len(cell) > MAX_CELL_CHARS:
+            b.warn(where, f"cell {cell[:30]!r}... is over {MAX_CELL_CHARS} characters")
+    if not aligns or not any(aligns):
+        aligns = ["right" if any(r[c].strip() for r in rows) and all(_numeric(r[c]) for r in rows if r[c].strip())
+                  else None for c in range(len(header))]
+
+    on = _math_on(b, spec)
+    scene = b.scene("table", kicker, {**spec, "sub": sub}, sub_is_source=from_source,
+                    header=[b.rich(h, on, where) for h in header],
+                    rows=[[b.rich(c, on, where) for c in row] for row in rows],
+                    aligns=aligns, credit=b.rich(credit, on, where), source=from_source)
+    scene.sfx.append((0.0, "whoosh"))
+    ops = scene.payload["ops"]
+
+    def column(value) -> int:
+        if isinstance(value, int):
+            if not 1 <= value <= len(header):
+                raise StoryboardError(f"{where}: there is no column {value}; the table has {len(header)}")
+            return value - 1
+        if value in header:
+            return header.index(value)
+        raise StoryboardError(f"{where}: there is no column {value!r}; the columns are {', '.join(header)}")
+
+    def row(value) -> int:
+        if not isinstance(value, int) or not 1 <= value <= len(rows):
+            raise StoryboardError(f"{where}: there is no row {value!r}; the table has {len(rows)} data rows")
+        return value - 1
+
+    clock = _Clock(b, scene, where)
+    stage = _Stage(scene, len(rows), "row", _staged(spec))
+    state, current = {}, None
+    for beat in spec.get("beats", []):
+        timed = clock.beat(beat)
+        _notes(scene, clock, beat, state)
+        for t, act, _ in timed:
+            if "reveal" in act:
+                stage.upto(act["reveal"], t)
+            if "highlight" in act:
+                value = act["highlight"]
+                if value is None:
+                    target = None
+                elif "cell" in value:
+                    target = (row(value["cell"][0]), column(value["cell"][1]))
+                elif "row" in value:
+                    target = (row(value["row"]), None)
+                elif "col" in value:
+                    target = (None, column(value["col"]))
+                else:
+                    raise StoryboardError(f'{where}: highlight is {{"row": n}}, {{"col": name}} or {{"cell": [n, name]}}')
+                if target and target[0] is not None and target[0] >= stage.visible:
+                    b.warn(where, f"row {target[0] + 1} is highlighted before it is revealed")
+                if target != current:
+                    ops.append({"op": "hl", "t": t, "row": target[0] if target else None,
+                                "col": target[1] if target else None, "on": target is not None})
+                    if target:
+                        scene.sfx.append((t, "tick"))
+                    current = target
+            if act.get("note") and current:
+                ops.append({"op": "note", "t": round(t + 0.1, 3), "text": act["note"]})
+                state["noted"] = True
+    stage.upto(len(rows), clock.t)
+    clock.finish()
+    return scene
+
+
 def _overview(b: _Builder, title: str, chapters: list[dict], intro: dict) -> Scene:
     """Opening card that lists the chapters, so the outline is watched instead of read."""
-    scene = b.scene("steps", "In this video", {"heading": title}, items=[{"title": c["title"]} for c in chapters])
+    on = b.math_default
+    scene = b.scene("steps", "In this video", {"heading": title},
+                    items=[{"title": b.rich(c["title"], on, title)} for c in chapters])
     scene.sfx.append((0.12, "chime"))
     for j in range(len(chapters)):
         scene.payload["ops"].append({"op": "reveal", "t": round(0.6 + j * 0.22, 3), "item": j})
@@ -594,8 +850,32 @@ def _overview(b: _Builder, title: str, chapters: list[dict], intro: dict) -> Sce
     return scene
 
 
+def _check_math(b: _Builder) -> list[str]:
+    """Render every expression once with KaTeX. A formula scene that fails is an error; inline math that fails
+    is shown as the plain text it is in the source (so the screen still shows only what is there) and warned about."""
+    if not b.tex:
+        return []
+    errors = texmath.validate([(x["tex"], x["display"]) for x in b.tex])
+    if errors is None:
+        b.warn("math", "no browser could be started to check the LaTeX; mistakes will show as red text")
+        return []
+    problems = []
+    for item, error in zip(b.tex, errors):
+        if not error:
+            continue
+        if item["strict"]:
+            problems.append(f"{item['where']}: LaTeX error: {error}")
+        else:
+            b.warn(item["where"], f"{item['seg']['raw']!r} is not valid LaTeX ({error}); it is shown as plain text")
+            seg = item["seg"]
+            kept = {"text": seg["raw"], **({"mark": seg["mark"]} if "mark" in seg else {})}
+            seg.clear()
+            seg.update(kept)
+    return problems
+
+
 SCENES = {"code": _code, "diff": _diff, "quote": _quote, "image": _image, "flow": _flow, "compare": _compare,
-          "stats": _stats, "steps": _steps}
+          "stats": _stats, "steps": _steps, "math": _math, "table": _table}
 OVERVIEW_FROM = 3   # videos with this many chapters open with a card that lists them
 
 
@@ -603,6 +883,7 @@ def build(storyboard: dict, root: Path, theme: str, narrator, captions: bool = T
           fmt: str = "wide") -> tuple[list[Scene], list[str]]:
     """All scenes of the video in order, plus warnings about things that may not read well."""
     b = _Builder(root, theme, narrator, captions, fmt)
+    b.math_default = bool(storyboard.get("math", True))
     scenes: list[Scene] = []
     problems: list[str] = []
     if not storyboard.get("chapters"):
@@ -634,6 +915,7 @@ def build(storyboard: dict, root: Path, theme: str, narrator, captions: bool = T
                 problems.append(f"chapter {n}, {spec['type']} scene: missing field {missing}")
             except (ValueError, FileNotFoundError) as problem:      # report every scene's problem in one run
                 problems.append(str(problem))
+    problems += _check_math(b)
     if problems:
         raise StoryboardError("\nerror: ".join(problems))
     scenes[0].payload["opening"] = True               # drawn in full from the first frame (see player.js)

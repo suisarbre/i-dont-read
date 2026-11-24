@@ -1,0 +1,6 @@
+compressor,enwik9 bytes,ns per byte,algorithm
+gzip -9,322649703,100,LZ77
+xz -9,197000000,5900,LZMA
+paq8px,125000000,290000,CM
+cmix v21,107963380,622949,CM
+fx2-cmix,110351665,272072,CM

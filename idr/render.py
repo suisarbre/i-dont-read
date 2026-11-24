@@ -22,7 +22,7 @@ ENCODE = ["-c:v", "libx264", "-crf", "18", "-preset", "veryfast", "-pix_fmt", "y
 
 def _player_version() -> str:
     h = hashlib.sha256()
-    for name in ("player.html", "player.js", "theme.css"):
+    for name in ("player.html", "player.js", "theme.css", "katex/katex.min.js", "katex/katex.min.css"):
         h.update((WEB / name).read_bytes())
     return h.hexdigest()[:12]
 

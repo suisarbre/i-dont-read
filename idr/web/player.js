@@ -79,10 +79,26 @@
     }
   }
 
+  // Math is rendered with KaTeX, with the same options plan.py checked it with (see texmath.py).
+  const KATEX = { throwOnError: true, strict: 'ignore', trust: c => c.command === '\\htmlClass' };
+  function tex(node, source, display) {
+    try { katex.render(source, node, { ...KATEX, displayMode: !!display }); }
+    catch (e) { node.textContent = source; }          // checked before filming, so this is only a safety net
+  }
+
+  // Text that may hold math: a string, or segments [{text} | {tex, display, raw}] made by plan.py.
+  function rich(node, value) {
+    if (!Array.isArray(value)) { node.textContent = value; return; }
+    for (const seg of value) {
+      if (seg.tex === undefined) { node.appendChild(document.createTextNode(seg.text)); continue; }
+      tex(node.appendChild(document.createElement('span')), seg.tex, seg.display);
+    }
+  }
+
   const el = (tag, cls, text) => {
     const e = document.createElement(tag);
     if (cls) e.className = cls;
-    if (text !== undefined && text !== null) e.textContent = text;
+    if (text !== undefined && text !== null) rich(e, text);
     return e;
   };
 
@@ -244,14 +260,21 @@
     const top = below(root, 40);
     const paper = root.appendChild(el('div', 'paper'));
     paper.style.top = `${top}px`;
-    const marks = {};
+    const marked = {};                                 // mark id -> its elements (a mark can hold math)
     for (const para of scene.paragraphs) {
       const p = paper.appendChild(el('p'));
       for (const seg of para) {
-        if (seg.mark === null || seg.mark === undefined) { p.appendChild(document.createTextNode(seg.text)); continue; }
-        const m = p.appendChild(el('mark', null, seg.text));
-        marks[seg.mark] = track(0, v => { m.style.backgroundSize = `${(v * 100).toFixed(2)}% 100%`; });
+        let into = p;
+        if (seg.mark !== null && seg.mark !== undefined) {
+          into = p.appendChild(el('mark'));
+          (marked[seg.mark] = marked[seg.mark] || []).push(into);
+        }
+        rich(into, [seg]);
       }
+    }
+    const marks = {};
+    for (const [id, nodes] of Object.entries(marked)) {
+      marks[id] = track(0, v => nodes.forEach(m => { m.style.backgroundSize = `${(v * 100).toFixed(2)}% 100%`; }));
     }
     let font = 48;                                     // shrink the text until the paper fits above the captions
     paper.style.fontSize = `${font}px`;
@@ -410,6 +433,191 @@
     }
   };
 
+  // A pill label that sits under or above a rectangle (in the coordinates of `root`), kept inside the frame.
+  function pill(root, cls = 'note') {
+    const node = root.appendChild(el('div', cls));
+    const a = anim(node, { o: 0, y: 10 });
+    const text = switcher('', v => { node.textContent = v; });
+    const pos = switcher(null, v => { if (v) { node.style.left = `${v[0]}px`; node.style.top = `${v[1]}px`; } });
+    let shown = false;
+    return {
+      // Tries spots around the rectangle and takes the first that stays in frame and covers no text in `avoid`.
+      show(t, label, rect, prefer = 'below', avoid = [], outside = null) {
+        if (shown) { a.o.to(t, 0, 0.15); t += 0.15; }
+        node.textContent = label;
+        const w = node.offsetWidth, h = node.offsetHeight;
+        node.textContent = '';
+        const clamp = x => Math.min(Math.max(G.padX, x), G.W - G.padX - w);
+        const centre = clamp(rect.x + rect.w / 2 - w / 2), right = clamp(rect.x + rect.w - w - 12);
+        const under = rect.y + rect.h + 14, over = rect.y - h - 14;
+        const spots = prefer === 'below'
+          ? [[centre, under], [centre, over], [right, under], [right, over]]
+          : [[centre, over], [right, over], [centre, under], [right, under]];
+        if (outside !== null) spots.push([centre, outside + 14]);     // below the whole block: always clear of its text
+        const fits = ([x, y]) => y >= 0 && y + h <= G.bottom;
+        const clear = ([x, y]) => avoid.every(r => r.x > x + w + 6 || r.x + r.w < x - 6 || r.y > y + h + 4 || r.y + r.h < y - 4);
+        const [left, top] = spots.find(p => fits(p) && clear(p)) || spots.find(fits) || spots[0];
+        text.set(t, label); pos.set(t, [left, top]);
+        a.o.to(t + 0.1, 1, 0.3); a.y.to(t + 0.1, 0, 0.3);
+        shown = true;
+      },
+      hide(t) { if (shown) { a.o.to(t, 0, 0.2); shown = false; } },
+    };
+  }
+
+  const within = (root, node) => {
+    const r = node.getBoundingClientRect(), o = root.getBoundingClientRect();
+    return { x: r.left - o.left, y: r.top - o.top, w: r.width, h: r.height };
+  };
+
+  // Formulas, from the source or written for the video, revealed one by one, with terms highlighted.
+  builders.math = (root, scene) => {
+    const t0 = header(root, scene);
+    const top = below(root, 44);
+    const sheet = root.appendChild(el('div', `sheet${scene.source ? ' source' : ''}`));
+    sheet.style.top = `${top}px`;
+    const eqs = scene.blocks.map(source => {
+      const row = sheet.appendChild(el('div', 'eq'));
+      tex(row, source, true);
+      return { row, a: anim(row, { o: 0, y: 18 }) };
+    });
+    const tall = G === FORMATS.tall;
+    let font = tall ? 56 : 64;                         // shrink until every formula fits across and the sheet clears the captions
+    // A numbered formula overflows by ~2px at any size, so allow that; but its number must not touch the formula.
+    const clearTag = row => {
+      const tags = [...row.querySelectorAll('.tag, .katex-tag')].map(n => n.getBoundingClientRect().left);
+      if (!tags.length) return true;
+      const ends = [...row.querySelectorAll('.base, .katex-base')].filter(n => !n.closest('.tag, .katex-tag'))
+        .map(n => n.getBoundingClientRect().right);
+      return Math.max(...ends) + 24 <= Math.min(...tags);
+    };
+    const fits = () => top + sheet.getBoundingClientRect().height <= G.bottom &&
+      eqs.every(e => e.row.scrollWidth <= e.row.clientWidth + 4 && clearTag(e.row));
+    sheet.style.fontSize = `${font}px`;
+    while (font > 26 && !fits()) { font -= 2; sheet.style.fontSize = `${font}px`; }
+    enter(sheet, t0 + 0.05, 34, 0.6);
+
+    // A marked term's box is the union of what is drawn inside it: glyphs, fraction bars and SVG (root signs,
+    // wide accents). KaTeX's own spans carry invisible struts much taller than the ink, so they are not used.
+    const ink = node => {
+      const boxes = [];
+      const walk = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
+      const range = document.createRange();
+      for (let t = walk.nextNode(); t; t = walk.nextNode()) {
+        if (!t.textContent.trim()) continue;
+        range.selectNodeContents(t);
+        boxes.push(range.getBoundingClientRect());
+      }
+      node.querySelectorAll('.frac-line, svg').forEach(n => boxes.push(n.getBoundingClientRect()));
+      return boxes.filter(r => r.width > 0 && r.height > 0);
+    };
+    const sheetAt = sheet.getBoundingClientRect(), rootAt = root.getBoundingClientRect();
+    const marks = {}, rects = {};
+    for (const node of sheet.querySelectorAll('[class*="idr-m"]')) {
+      const id = (node.className.match(/idr-m(\d+)/) || [])[1];
+      const boxes = ink(node);
+      if (id === undefined || !boxes.length) continue;
+      const pad = 6;
+      const x = Math.min(...boxes.map(r => r.left)) - pad, y = Math.min(...boxes.map(r => r.top)) - pad;
+      const w = Math.max(...boxes.map(r => r.right)) + pad - x, h = Math.max(...boxes.map(r => r.bottom)) + pad - y;
+      const mk = sheet.insertBefore(el('div', 'mk'), sheet.firstChild);
+      Object.assign(mk.style, { left: `${x - sheetAt.left - sheet.clientLeft}px`, top: `${y - sheetAt.top - sheet.clientTop}px`,
+        height: `${h}px`, width: '0px' });
+      marks[id] = track(0, v => { mk.style.width = `${(v * w).toFixed(2)}px`; });
+      rects[id] = { x: x - rootAt.left, y: y - rootAt.top, w, h };
+    }
+    const note = pill(root);
+    const whole = within(root, sheet);
+    const words = eqs.flatMap(e => ink(e.row)).map(r => ({ x: r.left - rootAt.left, y: r.top - rootAt.top, w: r.width, h: r.height }));
+    for (const op of scene.ops) {
+      if (op.op === 'reveal') { const e = eqs[op.line]; e.a.o.to(op.t, 1, 0.4); e.a.y.to(op.t, 0, 0.45); }
+      else if (op.op === 'mark') {
+        if (op.id === null) Object.values(marks).forEach(m => m.to(op.t, 0, 0.3));
+        else marks[op.id].to(op.t, 1, 0.6, easeInOut);
+      } else if (op.op === 'note') {
+        if (op.text) note.show(op.t, op.text, op.id !== null && op.id !== undefined ? rects[op.id] : whole, 'below', words, whole.y + whole.h);
+        else note.hide(op.t);
+      }
+    }
+  };
+
+  // A table: header always shown, rows revealed, a row, column or cell outlined.
+  builders.table = (root, scene) => {
+    const t0 = header(root, scene);
+    const top = below(root, 40);
+    const wrap = root.appendChild(el('div', `tablewrap${scene.source ? ' source' : ''}`));
+    wrap.style.top = `${top}px`;
+    const table = wrap.appendChild(el('table'));
+    const align = c => scene.aligns[c] || 'left';
+    const cell = (tr, tag, value, c) => {
+      const td = tr.appendChild(el(tag));
+      td.style.textAlign = align(c);
+      const rv = td.appendChild(el('div', 'rv'));
+      const tx = rv.appendChild(el('div', 'tx', value === '' ? ' ' : value));
+      return { td, rv, dim: track(1, v => { tx.style.opacity = v.toFixed(3); }) };
+    };
+    const head = table.appendChild(el('thead')).appendChild(el('tr'));
+    const heads = scene.header.map((h, c) => cell(head, 'th', h, c));
+    const body = table.appendChild(el('tbody'));
+    const rows = scene.rows.map(r => {
+      const tr = body.appendChild(el('tr'));
+      const cells = r.map((v, c) => cell(tr, 'td', v, c));
+      return { cells, a: cells.map(x => anim(x.rv, { o: 0, y: 14 })) };
+    });
+    if (scene.credit) wrap.appendChild(el('div', 'credit', scene.credit));
+    const box = wrap.appendChild(el('div', 'hlbox'));
+    let font = G === FORMATS.tall ? 34 : 32;         // shrink until the table fits across and clears the captions
+    const fits = () => top + wrap.getBoundingClientRect().height <= G.bottom && table.scrollWidth <= wrap.clientWidth + 1;
+    table.style.fontSize = `${font}px`;
+    while (font > 20 && !fits()) { font -= 2; table.style.fontSize = `${font}px`; }
+    enter(wrap, t0 + 0.05, 34, 0.6);
+
+    const area = (r, c) => {                           // outline target in wrap coordinates
+      const parts = r !== null && c !== null ? [rows[r].cells[c].td]
+        : r !== null ? rows[r].cells.map(x => x.td)
+        : [heads[c].td, ...rows.map(x => x.cells[c].td)];
+      const o = wrap.getBoundingClientRect();
+      const rs = parts.map(p => p.getBoundingClientRect());
+      const x = Math.min(...rs.map(q => q.left)) - o.left, y = Math.min(...rs.map(q => q.top)) - o.top;
+      return { x, y, w: Math.max(...rs.map(q => q.right)) - o.left - x, h: Math.max(...rs.map(q => q.bottom)) - o.top - y };
+    };
+    const bx = track(0, v => { box.style.left = `${v.toFixed(2)}px`; });
+    const by = track(0, v => { box.style.top = `${v.toFixed(2)}px`; });
+    const bw = track(0, v => { box.style.width = `${v.toFixed(2)}px`; });
+    const bh = track(0, v => { box.style.height = `${v.toFixed(2)}px`; });
+    const bo = track(0, v => { box.style.opacity = v.toFixed(3); });
+    const every = [...heads.map((h, c) => ({ x: h, r: -1, c })), ...rows.flatMap((x, r) => x.cells.map((y, c) => ({ x: y, r, c })))];
+    const note = pill(root);
+    const wrapAt = within(root, wrap);
+    const words = [...wrap.querySelectorAll('.tx')].map(n => {   // the text itself, not the cells around it
+      const r = document.createRange(); r.selectNodeContents(n);
+      const q = r.getBoundingClientRect(), o = root.getBoundingClientRect();
+      return { x: q.left - o.left, y: q.top - o.top, w: q.width, h: q.height };
+    }).filter(r => r.w > 0);
+    let shown = false, current = null;
+    for (const op of scene.ops) {
+      if (op.op === 'reveal') rows[op.row].a.forEach((a, i) => { a.o.to(op.t + i * 0.04, 1, 0.35); a.y.to(op.t + i * 0.04, 0, 0.35); });
+      else if (op.op === 'hl') {
+        if (!op.on) {
+          bo.to(op.t, 0, 0.25); every.forEach(e => e.x.dim.to(op.t, 1, 0.3)); shown = false; current = null; continue;
+        }
+        const g = area(op.row, op.col), move = shown ? 0.4 : 0;
+        bx.to(op.t, g.x, move, easeInOut); by.to(op.t, g.y, move, easeInOut);
+        bw.to(op.t, g.w, move, easeInOut); bh.to(op.t, g.h, move, easeInOut);
+        bo.to(op.t, 1, 0.25);
+        every.forEach(e => {
+          const inside = (op.row === null || e.r === op.row) && (op.col === null || e.c === op.col) &&
+            !(op.col === null && e.r === -1);
+          e.x.dim.to(op.t, inside || (op.row === null && e.r === -1 && e.c === op.col) ? 1 : 0.35, 0.3);
+        });
+        shown = true; current = g;
+      } else if (op.op === 'note') {
+        if (op.text && current) note.show(op.t, op.text, { ...current, x: current.x + wrapAt.x, y: current.y + wrapAt.y }, 'above', words, wrapAt.y + wrapAt.h);
+        else note.hide(op.t);
+      }
+    }
+  };
+
   // A real picture (image file, web page capture, PDF page) with a camera that zooms to regions.
   builders.image = (root, scene) => {
     const t0 = header(root, scene);
@@ -526,7 +734,9 @@
     // Characters on screen that this machine has no font for (they would show as empty boxes).
     // Best effort: a character counts as missing when it draws exactly like a code point no font has.
     missing() {
-      const text = document.getElementById('stage').textContent;
+      const copy = document.getElementById('stage').cloneNode(true);   // KaTeX brings its own fonts
+      copy.querySelectorAll('.katex').forEach(n => n.remove());
+      const text = copy.textContent;
       const chars = [...new Set([...text].filter(c => c.codePointAt(0) > 0x2ff && !/\s/.test(c)))];
       if (!chars.length) return [];
       const canvas = document.createElement('canvas');

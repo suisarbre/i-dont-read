@@ -1,0 +1,114 @@
+{
+  "title": "Math and tables",
+  "intro": { "say": "Three short chapters that show formulas and tables, from a source file or written for the video." },
+  "chapters": [
+    {
+      "title": "Math in quoted text",
+      "say": "What happens to dollar signs in a quote?",
+      "scenes": [
+        {
+          "type": "quote",
+          "heading": "Inline math renders, prices stay prices",
+          "file": "notes.md",
+          "lines": [3, 5],
+          "beats": [
+            { "say": "Math between single dollar signs is typeset in place.", "mark": "$\\log_2 \\frac{1}{p}$ bits" },
+            { "say": "A price written with a dollar sign stays plain text.", "mark": "costs $5 to $10 is not math" }
+          ]
+        },
+        {
+          "type": "math",
+          "heading": "A formula from the source",
+          "file": "notes.md",
+          "lines": [9, 11],
+          "expect": "$$",
+          "beats": [
+            { "say": "Display math is shown exactly as the file writes it.", "speak": "Display math is shown exactly as the file writes it." },
+            { "say": "One term at a time can be marked as the voice explains it.",
+              "mark": { "line": 1, "tex": "\\log_2 \\frac{1}{p_i}" }, "note": "cost of i" }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Formulas step by step",
+      "say": "How does a derivation unfold on screen?",
+      "scenes": [
+        {
+          "type": "math",
+          "heading": "Two rules from a paper",
+          "file": "paper.tex",
+          "lines": [3, 8],
+          "expect": "\\begin{align}",
+          "beats": [
+            { "say": "An align environment comes through whole, with its alignment.", "reveal": 1 },
+            { "say": "A second block in the same range is revealed on the next sentence.", "reveal": 2,
+              "mark": { "line": 2, "tex": "H(X \\mid Y)" }, "note": "with a hint" }
+          ]
+        },
+        {
+          "type": "math",
+          "heading": "The chain rule, written for this video",
+          "tex": ["H(X,Y) = H(X) + H(Y \\mid X)", "H(Y \\mid X) \\le H(Y)", "H(X,Y) \\le H(X) + H(Y)"],
+          "beats": [
+            { "say": "Writing both is writing one, then the other with the first as a hint.", "reveal": 1,
+              "mark": { "line": 1, "tex": "H(Y \\mid X)" }, "note": "the hint" },
+            { "say": "A hint never costs more on average.", "reveal": 2 },
+            { "say": "So the pair together never costs more than the two apart.", "reveal": 3,
+              "mark": { "line": 3, "tex": "\\le" } }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Tables",
+      "say": "Which compressor is smallest, and how slow is it?",
+      "scenes": [
+        {
+          "type": "table",
+          "heading": "A Markdown table from the notes",
+          "file": "notes.md",
+          "lines": [13, 18],
+          "expect": "| Code |",
+          "beats": [
+            { "say": "Four ways to code the digits of pi.", "reveal": 4 },
+            { "say": "The bits column is right aligned, as the table asks.", "highlight": { "col": "bits per digit" } },
+            { "say": "The Shannon limit is the floor.", "highlight": { "row": 4 }, "note": "the floor" }
+          ]
+        },
+        {
+          "type": "table",
+          "heading": "Rows picked from a CSV file",
+          "file": "bench.csv",
+          "rows": [1, 5],
+          "columns": ["compressor", "enwik9 bytes", "algorithm"],
+          "beats": [
+            { "say": "Five compressors on one gigabyte of Wikipedia.", "reveal": 5 },
+            { "say": "Context mixing takes the smallest results.", "highlight": { "cell": [4, "enwik9 bytes"] }, "note": "smallest" }
+          ]
+        },
+        {
+          "type": "table",
+          "heading": "A table written for the video",
+          "header": ["Probability", "Cost"],
+          "rows": [["$1/2$", "$1$ bit"], ["$1/4$", "$2$ bits"], ["$1/8$", "$3$ bits"]],
+          "source": "Cost of an outcome is $\\log_2 1/p$",
+          "beats": [
+            { "say": "Every halving of the probability adds one bit.", "reveal": 3, "highlight": { "col": "Cost" } }
+          ]
+        },
+        {
+          "type": "compare",
+          "heading": "Coding and modeling",
+          "columns": [
+            { "title": "Coding", "points": ["Target known: $\\log_2 \\frac{1}{p}$ bits", "Solved"] },
+            { "title": "Modeling", "points": ["Target: the shortest program", "Not computable"] }
+          ],
+          "beats": [
+            { "say": "Inline math also works in comparisons.", "reveal": 2 }
+          ]
+        }
+      ]
+    }
+  ]
+}

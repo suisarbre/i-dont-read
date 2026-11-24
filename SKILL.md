@@ -92,7 +92,7 @@ To change a finished video, edit the storyboard and render again. Scenes that di
 
 Each chapter opens with a title card that shows `title` and speaks `say`. Then its scenes play in order.
 
-A **beat** is one spoken sentence plus what changes on screen when that sentence starts. A beat with nothing but `say` leaves the picture as it is. Every scene has a `heading`, a `sub` line under it, and a list of `beats`. On `code`, `diff` and `quote` scenes the engine writes `sub` itself (the file and the lines on screen); on the others it is yours and optional.
+A **beat** is one spoken sentence plus what changes on screen when that sentence starts. A beat with nothing but `say` leaves the picture as it is. Every scene has a `heading`, a `sub` line under it, and a list of `beats`. On `code`, `diff` and `quote` scenes, and on `math` and `table` scenes read from a file, the engine writes `sub` itself (the file and the lines on screen); on the others it is yours and optional.
 
 | Scene | Use it when | Fields | What a beat can do |
 |---|---|---|---|
@@ -104,8 +104,12 @@ A **beat** is one spoken sentence plus what changes on screen when that sentence
 | `compare` | Two options, or before and after | `columns: [{ "title", "points": [] }, { ... }]` (exactly 2, up to 5 rows) | `reveal`: how many rows are visible from now on (a row is the same line in both columns) |
 | `stats` | The numbers are the story | `items: [{ "value", "label", "note" }]` (1 to 4) | `reveal`: how many cards are visible from now on |
 | `steps` | An ordered list: how to do something, or what you need from the user | `items: [{ "title", "detail", "cmd" }]` (1 to 6; `cmd` shows a command in monospace) | `reveal`: how many steps are visible from now on |
+| `math` | A formula is the point: from the source, or one you write to explain it | From the source: `file` (`.tex` or `.md`), `lines: [first, last]`, `expect`, optional `ref`. The range's display math (`$$...$$`, `\[...\]`, `equation`/`align`/`gather` environments) is shown as written. Written for the video: `tex`, a list of LaTeX formulas, one per line. 1 to 4 formulas | `reveal`: how many formulas are visible from now on. `mark`: `{ "line": n, "tex": "part of that formula's LaTeX" }` (or a list) runs a marker over that term; `null` clears all marks. `note`: a short label under the latest mark |
+| `table` | Rows and columns: results, options, a comparison of several things | From the source: `file` with `lines: [first, last]` around a Markdown table, or a `.csv`/`.tsv` with `rows: [first, last]` (data rows after the header) and optional `columns` (names or 1-based numbers, in the order to show). Written for the video: `header` and `rows`, plus `source` for a credit line | `reveal`: how many rows are visible (the header always is). `highlight`: `{ "row": n }`, `{ "col": name or n }` or `{ "cell": [n, col] }` (`null` clears). `note`: a short label by the highlight |
 
 Any beat can also carry `speak` (see section 7) or, with no `say`, a `hold` in seconds. `intro` and a chapter take `speak` beside their `say` too.
+
+**Math in any text.** Write `$...$` for inline math and `$$...$$` for display math in headings, `quote` text, `table` cells and `flow`, `compare`, `stats` and `steps` text; it is typeset with KaTeX. A dollar sign counts as math only by Pandoc's rule (an opening `$` followed by a non-space, a closing `$` after a non-space and not before a digit), so `$5 to $10` and `$HOME` stay plain text; write `\$` for a literal dollar where the rule would misread it. LaTeX that does not parse is shown as the plain text it is, with a warning. `"math": false` on a scene (or at the top of the storyboard) turns this off. In a `quote`, a `mark` may cover whole `$...$` expressions but may not start or end inside one; to mark a term inside a formula, use a `math` scene.
 
 In scenes with `reveal`, show the first item when the first sentence starts: a scene that stays empty while the voice talks looks broken, and the check warns about it.
 
@@ -124,7 +128,7 @@ Source files are read as UTF-8. For a file in another encoding, add `"encoding"`
 
 Use this when one sentence walks across several lines or items. It reads far better than three short sentences, and the voice model reports when each word is spoken, so the picture lands on the word.
 
-A chapter is usually 1 to 3 scenes. Alternate real source (`code`, `diff`, `quote`, `image`) with an infographic (`flow`, `compare`, `stats`) that puts it in context.
+A chapter is usually 1 to 3 scenes. Alternate real source (`code`, `diff`, `quote`, `image`, and `math` or `table` read from a file) with an infographic (`flow`, `compare`, `stats`, and `math` or `table` written for the video) that puts it in context.
 
 
 ## 5. Web pages
@@ -187,6 +191,7 @@ How the old code behaved is a claim as well. Say it only when you can point at i
 - One sentence per beat, about 25 words at most. Write it to be heard, not read.
 - Say what the highlighted thing does and why it matters. Never read code aloud.
 - The picture must match the words: put the `highlight`, `mark` or `reveal` on the beat whose sentence is about it.
+- Never put LaTeX or math symbols in `say`: the voice cannot read them. Say the formula in words ("H of X given Y"), and add `speak` if a name needs help.
 - The voice mispronounces identifiers, paths and symbols. When a sentence needs one, keep `say` as it should appear in the caption and add `speak` with how to pronounce it: `"say": "It calls parse_args() first."`, `"speak": "It calls parse args first."`
 - Acronyms in capitals are spelled out letter by letter (HTTP, URL, API, TLS), and numbers are read as numbers, so those need no `speak`. Made-up and mixed-case names often go wrong. You cannot listen, but you can look: `python -m idr sounds "PyPI" "memtable"` prints how each will be pronounced (here "pie pie" and "mem-tuh-bul"), and you can try a respelling the same way (`"pie pee eye"`, `"mem table"`) before putting it in `speak`.
 - A chapter's `say` is a hook: the question the chapter answers, or its promise in one line.
@@ -198,6 +203,8 @@ How the old code behaved is a claim as well. Say it only when you can point at i
 This is the reason the skill exists, so do not work around it.
 
 - `code`, `diff` and `quote` scenes show only what is in the file at those lines. Never paste code or prose into the storyboard.
+- The same holds for `math` and `table` scenes with `file`: the LaTeX and the cells are shown as the file has them (the one change is that `\label{...}` is dropped). If the source writes a formula as plain text, like `log2 1/p`, do not present your LaTeX version of it as the source: write it in a `math` scene with `tex`, which is shown as an explanation, with no file line.
+- A `math` or `table` scene with `tex` or `header` is your explanation. Every value in a written table must come from the source, as in `stats`; name where in `source`.
 - Always set `expect` on a `code` or `diff` scene to a short string from the **first line** of `lines`. It pins the range: the render stops if that line is no longer there. Start the range on a line with something of its own on it, not on a lone brace.
 - A `mark` must be copied exactly from the quoted lines, and a `find` exactly from the page. The render stops if either is not found.
 - An `image` scene shows the real file or the real page. Do not draw or generate a picture and present it as the source.
@@ -212,6 +219,8 @@ This is the reason the skill exists, so do not work around it.
 - `compare` points: at most 80 characters. A `note` beside a highlight: two or three words.
 - `stats` values: at most 10 characters. Put the words in `label`.
 - `steps`: titles and commands at most 48 characters each.
+- `math`: 1 to 4 formulas per scene. Every formula is parsed with KaTeX by `check`; one that does not parse is an error.
+- `table`: at most 6 columns and 8 rows (4 columns read best in the tall format), and 40 characters per cell.
 - Headings: at most 60 characters.
 
 ## 10. Settings
