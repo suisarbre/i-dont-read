@@ -117,6 +117,9 @@ def _decode(data: bytes, name: str, encoding: str | None = None) -> str:
     except (UnicodeDecodeError, LookupError):
         raise ValueError(f'{name} is not {encoding or "UTF-8"} text. If it is in another encoding, '
                          f'name it in the scene, for example "encoding": "cp949"') from None
+    if "\x00" in text:                                   # UTF-16 with no byte-order mark reads as UTF-8 full of NULs
+        raise ValueError(f"{name} holds NUL characters, so it is not {encoding or 'UTF-8'} text. If it is UTF-16, "
+                         'name it in the scene: "encoding": "utf-16-le"')
     return text.replace("\r\n", "\n").replace("\r", "\n")
 
 
@@ -510,6 +513,9 @@ def md_table(root: Path, file: str, first: int, last: int, ref: str | None = Non
     data = []
     for line in rows[2:]:
         cells = _table_cells(line)
+        if len(cells) > len(header) and any(c.strip() for c in cells[len(header):]):
+            raise ValueError(f"{file} lines {first}-{last}: the row {line.strip()[:40]!r} has {len(cells)} cells and the "
+                             f"header has {len(header)}, so some of it has no column; it cannot be shown as that table")
         data.append((cells + [""] * len(header))[:len(header)])
     return header, (aligns + [None] * len(header))[:len(header)], data, lines[0]
 
@@ -544,5 +550,9 @@ def csv_table(root: Path, file: str, first: int, last: int, columns: list | None
                 raise ValueError(f"{file} has no column {col!r}; its columns are {', '.join(header)}")
     else:
         pick = list(range(len(header)))
+    for k, row in enumerate(body[first - 1:last], first):
+        if len(row) > len(header) and any(cell.strip() for cell in row[len(header):]):
+            raise ValueError(f"{file}: data row {k} has {len(row)} cells and the header has {len(header)}, so some of "
+                             "it has no column (a comma inside a cell that is not quoted?); it cannot be shown as that table")
     rows = [[(row[i] if i < len(row) else "").strip() for i in pick] for row in body[first - 1:last]]
     return [header[i] for i in pick], rows

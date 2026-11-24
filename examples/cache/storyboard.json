@@ -30,9 +30,9 @@
             { "say": "A lookup of b is a hit, so b moves to the back.", "mark": { "value": "b" },
               "cues": [ { "at": "moves to the back", "do": { "move": { "value": "b" }, "to": "back" } } ] },
             { "say": "A lookup of d is a miss: d is loaded and stored at the back.", "at": "stored", "do": { "push": "d" } },
-            { "say": "One more miss, for e, makes five entries, one too many.", "at": "makes five",
-              "do": [ { "pop": "front" }, { "push": "e" } ] },
-            { "say": "So the front entry went first: a, the one used longest ago.", "pointers": { "next out": "front" } }
+            { "say": "One more miss, for e, makes five entries, one too many.", "at": "makes five", "do": { "push": "e" } },
+            { "say": "So the front entry is dropped: a, the one used longest ago.", "mark": "front",
+              "cues": [ { "at": "a, the one", "do": { "pop": "front" } } ] }
           ]
         }
       ]

@@ -138,7 +138,7 @@ def _misfits(scenes, fmt: str) -> list[str]:
     with "~" is a warning: nothing is cut off, but something sits badly."""
     def worth(scene) -> bool:
         kind = scene.payload.get("type")
-        return kind in ("math", "plot", "diagram", "sequence") or (kind in ("code", "diff") and any(
+        return kind in ("math", "plot", "diagram", "sequence", "array", "chart") or (kind in ("code", "diff") and any(
             op.get("op") == "note" and op.get("text") for op in scene.payload.get("ops", [])))
     laid_out = [scene for scene in scenes if worth(scene)]
     if not laid_out:

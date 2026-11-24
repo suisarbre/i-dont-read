@@ -124,7 +124,9 @@ class Arrays(unittest.TestCase):
         bad(["a", "b"], {"pop": 2}, "is index 2, but the row has indices 0 to 1 at that point: [a, b]")
         bad(["a", "a"], {"remove": {"value": "a"}}, "2 do; give its index instead")
         bad(["a"], {"move": {"value": "q"}, "to": "back"}, "none does")
-        bad(["a", "b"], {"push": "c"}, 'its "capacity" is 2', capacity=2)
+        bad(["a", "b"], {"push": "c"}, 'the scene ends with 3 cells in a row whose "capacity" is 2', capacity=2)
+        bad(["a", "b"], {"move": 1, "to": "back"}, "would leave 'b' where it is")
+        bad(["a", "b"], {"set": 0, "to": "a"}, "nothing would change")
         bad(["a", "b"], {"swap": [1, 1]}, "two different cells")
         bad(["a"], {"shove": "b"}, "an operation is one of push, pop")
         bad(["a"], {"push": "b", "to": "front"}, '"to" is not a field of "push"')
@@ -156,7 +158,9 @@ class Sequences(unittest.TestCase):
         scene, _ = build(self.scene(beats=[{"say": "one", "reveal": 1}, {"say": "two", "reveal": 3, "focus": 2}]))
         self.assertEqual([op["message"] for op in scene.payload["ops"] if op["op"] == "reveal"], [0, 1, 2])
         self.assertEqual([op["message"] for op in scene.payload["ops"] if op["op"] == "focus"], [1])
-        refused(self, self.scene(beats=[{"say": "one", "focus": 4}]), "focus 4 is not one of the 3 messages")
+        refused(self, self.scene(beats=[{"say": "one", "focus": 4}]), '"focus" is the number of a message, from 1 to 3')
+        refused(self, self.scene(beats=[{"say": "one", "focus": True}]), '"focus" is the number of a message')
+        refused(self, self.scene(beats=[{"say": "one", "reveal": 1, "focus": 3}]), "not on screen yet")
 
 
 class Charts(unittest.TestCase):
@@ -388,6 +392,96 @@ class TheSourceFolder(unittest.TestCase):
                 "could not be read as a table", {"d.csv": 'n,v\na,"' + "x" * 140000 + '"\n'})
 
 
+class OnlyWhatIsThere(unittest.TestCase):
+    """A beat points at what is on screen, counts go up, and what is typed has to mean something."""
+
+    def diagram(self, **fields):
+        return {"type": "diagram", "heading": "h", "nodes": [{"label": n} for n in "abcd"],
+                "edges": [{"from": "a", "to": "b"}, {"from": "b", "to": "c"}, {"from": "c", "to": "d"}], "beats": [{"say": "one"}], **fields}
+
+    def chart(self, **fields):
+        return {"type": "chart", "heading": "h", "file": "d.csv", "rows": [1, 3], "x": "size", "y": "rate",
+                "beats": [{"say": "one"}], **fields}
+
+    def test_reveal_is_a_count_that_only_goes_up(self):
+        for value in (-1, True, "3", 1.9, 5, "all"):
+            refused(self, self.diagram(beats=[{"say": "one", "reveal": value}]), '"reveal" is how many of the 4 nodes')
+        refused(self, self.diagram(beats=[{"say": "one", "reveal": 3}, {"say": "two", "reveal": 1}]), "cannot hide one again")
+        refused(self, self.chart(y=["hits", "rate"][:1], beats=[{"say": "one", "reveal": "1"}]), "of the 1 series", {"d.csv": CSV})
+
+    def test_a_beat_cannot_point_at_what_is_not_there_yet(self):
+        refused(self, self.diagram(beats=[{"say": "one", "reveal": 1, "focus": "d"}]), "'d', which is not on screen yet")
+        refused(self, self.diagram(beats=[{"say": "one", "reveal": 3, "follow": ["c", "d"]}]), "'d', which is not on screen yet")
+        refused(self, self.diagram(beats=[{"say": "one", "follow": {"from": "a", "to": "b"}}]), '"follow" is an edge written')
+        data = {"d.csv": "size,a,b\n1,5,6\n2,7,8\n3,9,10\n"}
+        refused(self, self.chart(y=["a", "b"], beats=[{"say": "one", "reveal": 1, "highlight": {"row": 1, "series": "b"}}]),
+                "before that column is drawn", data)
+        refused(self, self.chart(y=["a", "b"], beats=[{"say": "one", "highlight": {"row": 1}}]), "must say which column it means", data)
+
+    def test_a_scene_needs_a_sentence(self):
+        for scene in (self.diagram(beats=[]), {"type": "array", "heading": "h", "items": ["a"]},
+                      {"type": "sequence", "heading": "h", "actors": ["A", "B"], "messages": [{"from": "A", "to": "B", "label": "x"}], "beats": []}):
+            refused(self, scene, "needs at least one beat")
+        refused(self, self.chart(beats=[]), "needs at least one beat", {"d.csv": CSV})
+
+    def test_a_ring_ends_when_the_next_sentence_starts(self):
+        scene, _ = build(self.diagram(beats=[{"say": "First this one.", "focus": "a", "follow": ["a", "b"]},
+                                             {"say": "Then, much later in the sentence, that one.", "at": "that one", "focus": "b"}]))
+        second = scene.starts[1]
+        rings = [(op["t"], op["nodes"]) for op in scene.payload["ops"] if op["op"] == "focus"]
+        self.assertEqual([nodes for _, nodes in rings], [[0], [], [1]])
+        self.assertLess(abs(rings[1][0] - second), 0.1)
+        self.assertGreater(rings[2][0], second + 0.5)
+
+    def test_a_diagram_too_wide_says_what_takes_the_width(self):
+        chain = {"type": "diagram", "heading": "h", "nodes": [{"label": n} for n in "abcdef"],
+                 "edges": [{"from": a, "to": z} for a, z in zip("abcde", "bcdef")] + [{"from": "a", "to": z} for z in "cdef"],
+                 "beats": [{"say": "one"}]}
+        refused(self, chain, "a layer holds at most 1 node; the rest of the width is arrows that pass a layer")
+        refused(self, {**chain, "nodes": [{"label": "a"}], "edges": []}, "one thing alone is not a diagram")
+
+    def test_a_row_may_pass_its_capacity_for_a_moment(self):
+        scene, _ = build({"type": "array", "heading": "h", "items": ["a", "b"], "capacity": 2, "beats": [
+            {"say": "Store, then evict.", "do": {"push": "c"}}, {"say": "Out goes the front.", "do": {"pop": "front"}}]})
+        self.assertEqual([len(op["row"]) for op in scene.payload["ops"] if op["op"] == "change"], [3, 2])
+        self.assertEqual(scene.payload["most"], 3)
+
+    def test_cells_that_would_look_the_same_are_the_same(self):
+        refused(self, {"type": "array", "heading": "h", "items": ["a", "a "], "beats": [{"say": "one", "mark": {"value": "a"}}]}, "2 do")
+        refused(self, {"type": "array", "heading": "h", "items": ["a"], "index": "false", "beats": [{"say": "one"}]}, '"index" is true or false')
+        refused(self, {"type": "array", "heading": "h", "items": ["a"], "beats": [{"say": "one", "pointers": 0}]}, '"pointers" names up to 3 places')
+
+    def test_a_chart_takes_only_what_it_uses(self):
+        files = {"d.csv": CSV}
+        refused(self, self.chart(sub="measured on 4,000 machines"), 'it takes no "sub"', files)
+        refused(self, self.chart(lines=[1, 3]), 'it takes no "lines"', files)
+        refused(self, self.chart(rows=[True, True]), '"rows" is [first, last]', files)
+        refused(self, self.chart(rows=[1, 2, 3]), '"rows" is [first, last]', files)
+        refused(self, self.chart(file=5), '"file" is the path of a file', files)
+        refused(self, self.chart(expect=5), '"expect" is a piece of text', files)
+        refused(self, self.chart(y="size"), "'size' is given twice", files)
+        refused(self, self.chart(y=["rate", "rate"]), "names the column 'rate' twice", files)
+        refused(self, self.chart(beats=[{"say": "one", "highlight": {"row": 1, "x": "8"}}]), "not both", files)
+        refused(self, self.chart(y="t", x="n"), "2 columns are called that", {"d.csv": "n,t,t\na,1,2\nb,3,4\nc,5,6\n"})
+        refused(self, self.chart(x="n", y="v", rows=[1, 2]), "has 3 cells and the header has 2", {"d.csv": "n,v\na,1\nb,2,9\n"})
+        refused(self, self.chart(x="n", y="v", rows=[1, 1]), "holds NUL characters", {"d.csv": "n,v\na,1\x00\n"})
+
+    def test_expect_can_pin_the_first_row(self):
+        build(self.chart(expect="4,2565"), {"d.csv": CSV})
+        refused(self, self.chart(expect="4,2565"), "neither the header", {"d.csv": CSV.replace("size,hits,rate,note\n", "size,hits,rate,note\n2,1000,5.0%,\n")})
+
+    def test_a_typed_number_the_chart_does_not_draw_is_pointed_out(self):
+        _, warnings = build(self.chart(beats=[{"say": "It takes only 3 milliseconds at size 8.", "highlight": {"x": "8"}}]), {"d.csv": CSV})
+        self.assertEqual(len([w for w in warnings if "says 3, which is not a number this chart draws" in w]), 1, warnings)
+        _, warnings = build(self.chart(beats=[{"say": "At size {x} it is {value}, up from 12.8.", "highlight": {"x": "8"}}]), {"d.csv": CSV})
+        self.assertEqual([w for w in warnings if "not a number this chart draws" in w], [])
+
+    def test_a_first_row_of_numbers_is_probably_not_a_header(self):
+        scene = {"type": "chart", "heading": "h", "file": "d.csv", "rows": [1, 2], "x": 1, "y": 2, "beats": [{"say": "one"}]}
+        _, warnings = build(scene, {"d.csv": "4,0.50\n8,0.62\n16,0.75\n"})
+        self.assertTrue(any("looks like data, not column names" in w for w in warnings), warnings)
+
+
 class LaidOut(unittest.TestCase):
     """What only the browser can measure: an arrow behind a box, a label with no room, a label that would be cut."""
 
@@ -434,6 +528,29 @@ class LaidOut(unittest.TestCase):
                "edges": [{"from": "router", "to": n} for n in ("auth", "cache", "db", "reply")] + [{"from": "auth", "to": "reply"}],
                "beats": [{"say": "one"}]}
         self.assertEqual(self.problems(fan), [])
+
+    def test_a_cell_text_wider_than_its_cell_is_reported(self):
+        row = {"type": "array", "heading": "h", "items": [f"entry_number{i:02d}" for i in range(12)], "beats": [{"say": "one"}]}
+        found = self.problems(row)
+        self.assertTrue(any("does not fit in a cell when the row has room for 12" in text for text in found), found)
+        self.assertEqual(self.problems({**row, "items": ["entry_number00", "b", "c"]}), [])
+
+    def test_numbers_of_points_close_together_do_not_cover_each_other(self):
+        text = "t,a,b,c\n" + "".join(f"{i},{100 + i},{100.5 + i},{101 + i}\n" for i in range(1, 9))
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "d.csv").write_text(text)
+            scene = {"type": "chart", "heading": "h", "file": "d.csv", "rows": [1, 8], "x": "t", "y": ["a", "b", "c"], "kind": "line",
+                     "beats": [{"say": "one", "highlight": [{"row": 4, "series": n} for n in "abc"]}]}
+            built, _ = plan.build({"title": "t", "chapters": [{"title": "c", "scenes": [scene]}]}, Path(tmp), "light",
+                                  plan.DryNarrator("no such voice"))
+        self.studio.problems.clear()
+        self.studio._load(built[-1])
+        self.assertEqual(self.studio.problems, [])
+        boxes = self.studio.page.evaluate("() => [...document.querySelectorAll('.value.pin')].map(e => { const r = e.getBoundingClientRect(); return [r.left, r.top, r.right, r.bottom]; })")
+        self.assertEqual(len(boxes), 3)
+        for i, p in enumerate(boxes):
+            for q in boxes[i + 1:]:
+                self.assertFalse(p[0] < q[2] and p[2] > q[0] and p[1] < q[3] and p[3] > q[1], (p, q))
 
     def test_a_message_that_would_be_cut_is_reported(self):
         def talk(label, a="Client", z="Worker"):

@@ -295,7 +295,13 @@ class _Stage:
             self.upto(count, 0.45)
 
     def upto(self, n: int, t: float) -> None:
-        n = min(int(n), self.count)
+        if isinstance(n, bool) or not isinstance(n, int) or not 0 <= n <= self.count:
+            things = self.key if self.key.endswith("s") else f"{self.key}s"
+            raise ValueError(f'"reveal" is how many of the {self.count} {things} are visible from then on: a whole '
+                             f"number from 0 to {self.count}, not {n!r}")
+        if n < self.visible:
+            raise ValueError(f'"reveal": {n} comes after "reveal": {self.visible}; it says how many are visible from '
+                             "then on and cannot hide one again, so the numbers only go up")
         for j, item in enumerate(range(self.visible, n)):
             at = round(t + j * STAGGER, 3)
             self.scene.payload["ops"].append({"op": "reveal", "t": at, self.key: item})
@@ -1870,9 +1876,11 @@ def build(storyboard: dict, root: Path, theme: str, narrator, captions: bool = T
                 problems.append(str(problem) if named else f"{spec.get('heading') or spec['type']}: {problem}")
             except (TypeError, AttributeError, OverflowError, ZeroDivisionError) as problem:
                 # A field holds the wrong kind of value (a number where a list belongs). Say which scene, not a traceback.
+                listed = ("guides/math.md" if spec["type"] in ("math", "plot") else "guides/diagrams.md"
+                          if spec["type"] in ("diagram", "array", "sequence", "chart") else "SKILL.md section 4")
                 problems.append(f"chapter {n}, {spec.get('heading') or spec['type']} ({spec['type']} scene): a field has "
                                 f"the wrong kind of value ({type(problem).__name__}: {problem}); compare the scene with "
-                                "its fields in SKILL.md section 4")
+                                f"its fields in {listed}")
     problems += _check_math(b)
     if problems:
         raise StoryboardError("\nerror: ".join(problems))

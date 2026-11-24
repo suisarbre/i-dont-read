@@ -20,6 +20,11 @@ def _words(value, what: str, where: str, needed: bool = True) -> str | None:
     return " ".join(value.split())
 
 
+def _beats(spec: dict, what: str, where: str) -> None:
+    if not isinstance(spec.get("beats"), list) or not spec["beats"]:
+        raise StoryboardError(f"{where}: {what} needs at least one beat: a sentence about what it shows")
+
+
 def _flag(item: dict, key: str, what: str, where: str) -> bool:
     if not isinstance(item.get(key, False), bool):
         raise StoryboardError(f'{where}: "{key}" on {what} is true or false, not {item[key]!r}')
@@ -137,8 +142,11 @@ def _diagram(b, spec: dict, kicker: str) -> plan.Scene:
     if not isinstance(spec["nodes"], list) or not isinstance(spec.get("edges") or [], list):
         raise StoryboardError(f'{where}: "nodes" and "edges" are lists of objects')
     nodes, edges = ([dict(x) if isinstance(x, dict) else x for x in given] for given in (spec["nodes"], spec.get("edges") or []))
+    _beats(spec, "a diagram", where)
     if not 2 <= len(nodes) <= MAX_NODES:
-        raise StoryboardError(f"{where}: a diagram shows 2 to {MAX_NODES} nodes, not {len(nodes)}; split it into two scenes")
+        raise StoryboardError(f"{where}: a diagram shows 2 to {MAX_NODES} nodes, not {len(nodes)}; "
+                              + ("split it into two scenes" if len(nodes) > MAX_NODES else
+                                 "one thing alone is not a diagram: add what it connects to, or say it in another scene"))
     ids = []
     for node in nodes:
         if not isinstance(node, dict) or "label" not in node:
@@ -146,6 +154,9 @@ def _diagram(b, spec: dict, kicker: str) -> plan.Scene:
         plan._only(node, {"id", "label", "desc"}, "a node", where)
         node["label"] = _words(node["label"], "a node's label", where)
         node["desc"] = _words(node.get("desc"), f"the \"desc\" of {node['label']!r}", where, needed=False)
+        if len(node["desc"] or "") > 36:
+            b.warn(where, f"the \"desc\" of {node['label']!r} is {len(node['desc'])} characters; it is small print "
+                   "under the label, so keep it under 36 or it will be too small to read")
         if "id" in node and (isinstance(node["id"], bool) or not isinstance(node["id"], (str, int)) or not str(node["id"]).strip()):
             raise StoryboardError(f"{where}: the \"id\" of {node['label']!r} is a short name, not {node['id']!r}")
         ids.append(str(node["id"]).strip() if "id" in node else node["label"])
@@ -179,10 +190,14 @@ def _diagram(b, spec: dict, kicker: str) -> plan.Scene:
     if placed["layers"] > deep or placed["across"] > wide:
         other = "down" if direction == "right" else "right"
         fits = placed["layers"] <= ROOM[(b.fmt, other)][0] and placed["across"] <= ROOM[(b.fmt, other)][1]
+        most = max(sum(1 for at in placed["nodes"].values() if at[0] == k) for k in range(placed["layers"]))
+        passing = (f" (a layer holds at most {most} node{'s' * (most != 1)}; the rest of the width is arrows that "
+                   "pass a layer on their way to a later one)") if placed["across"] > most else ""
         raise StoryboardError(
-            f"{where}: this diagram is {placed['layers']} steps long and {placed['across']} wide, and a {b.fmt} frame "
-            f"drawn {direction}wards has room for {deep} by {wide}; "
-            + (f'add "direction": "{other}"' if fits else "show part of it, or split it into two scenes"))
+            f"{where}: this diagram is {placed['layers']} step{'s' * (placed['layers'] != 1)} long and {placed['across']} "
+            f"wide{passing}, and a {b.fmt} frame drawn {direction}wards has room for {deep} by {wide}; "
+            + (f'{"change" if spec.get("direction") else "add"} "direction"{" to" if spec.get("direction") else ":"} "{other}"'
+               if fits else "show part of it, or split it into two scenes"))
     limit = 14 if placed["layers"] >= 5 and direction == "right" else 20
     for node in nodes:
         if len(node["label"]) > limit:
@@ -191,7 +206,7 @@ def _diagram(b, spec: dict, kicker: str) -> plan.Scene:
     scene = b.scene("diagram", kicker, spec, direction=direction, layers=placed["layers"], across=placed["across"],
                     nodes=[{"id": name, "label": b.rich(node["label"], on, where), "desc": b.rich(node.get("desc"), on, where),
                             "at": list(placed["nodes"][name])} for name, node in zip(ids, nodes)],
-                    edges=[{"from": ids.index(a), "to": ids.index(z), "label": edge.get("label"),
+                    edges=[{"from": ids.index(a), "to": ids.index(z), "label": b.rich(edge.get("label"), on, where),
                             "dashed": bool(edge.get("dashed")), "route": [list(p) for p in route], "back": back}
                            for (a, z), edge, route, back in zip(pairs, edges, placed["routes"], placed["back"])])
     scene.sfx.append((0.0, "whoosh"))
@@ -199,13 +214,27 @@ def _diagram(b, spec: dict, kicker: str) -> plan.Scene:
     clock = plan._Clock(b, scene, where)
     stage = plan._Stage(scene, len(ids), "node", plan._staged(spec))
     focused, walked = [], []
+
+    def on_screen(i: int, what: str) -> None:
+        if i >= stage.visible:
+            raise StoryboardError(f"{where}: {what} names {ids[i]!r}, which is not on screen yet: the beats have revealed "
+                                  f'{stage.visible} of the {len(ids)} nodes by then. Reveal it in the same beat ("reveal": {i + 1}) or earlier')
+
     for beat in spec.get("beats", []):
-        for t, act, src in clock.beat(beat):
+        acts = clock.beat(beat)
+        if beat.get("at") and (focused or walked):        # the last sentence's ring and path end when this sentence starts
+            start = round(clock.started + 0.05, 3)
+            ops.extend(op for op in ({"op": "focus", "t": start, "nodes": []} if focused else None,
+                                     {"op": "follow", "t": start, "edges": []} if walked else None) if op)
+            focused, walked = [], []
+        for t, act, src in acts:
             if "reveal" in act:
                 stage.upto(act["reveal"], t)
             if "focus" in act:
                 given = act["focus"]
                 target = [] if given is None else [ids.index(known(n, '"focus"')) for n in (given if isinstance(given, list) else [given])]
+                for i in target:
+                    on_screen(i, '"focus"')
             else:
                 target = [] if src is beat else focused          # a new sentence with no focus drops the ring
             if target != focused:
@@ -213,6 +242,8 @@ def _diagram(b, spec: dict, kicker: str) -> plan.Scene:
                 focused = target
             if "follow" in act:
                 given = act["follow"]
+                if given is not None and not isinstance(given, list):
+                    raise StoryboardError(f'{where}: "follow" is an edge written ["from", "to"], or a list of them; not {given!r}')
                 steps = [] if given is None else (given if given and isinstance(given[0], list) else [given])
                 path = []
                 for step in steps:
@@ -223,6 +254,8 @@ def _diagram(b, spec: dict, kicker: str) -> plan.Scene:
                         raise StoryboardError(f"{where}: \"follow\" walks from {pair[0]!r} to {pair[1]!r}, but there is no "
                                               "edge that way; add it to \"edges\" or follow one that is there")
                     path.append(pairs.index(pair))
+                    for end in pair:
+                        on_screen(ids.index(end), '"follow"')
             else:
                 path = [] if src is beat else walked
             if path != walked:
@@ -258,12 +291,15 @@ def _array(b, spec: dict, kicker: str) -> plan.Scene:
     where = spec.get("heading") or "array"
     plan._only(spec, {"type", "heading", "sub", "beyond", "math", "beats", "items", "capacity", "index", "ends"}, "an array scene", where)
     room = MAX_CELLS[b.fmt]
+    _beats(spec, "an array scene", where)
+    if not isinstance(spec.get("index", True), bool):
+        raise StoryboardError(f'{where}: "index" is true or false (whether the cells are numbered), not {spec["index"]!r}')
 
     def text(value) -> str:
         if isinstance(value, bool) or not isinstance(value, (str, int, float)):
             raise StoryboardError(f"{where}: a cell holds a short text or a number, not {value!r}")
-        shown = str(value)
-        if not shown.strip() or len(shown) > 14:
+        shown = " ".join(str(value).split())                # "a" and "a " would be two cells that look the same
+        if not shown or len(shown) > 14:
             raise StoryboardError(f"{where}: a cell holds 1 to 14 characters, not {shown!r}")
         return shown
 
@@ -282,11 +318,12 @@ def _array(b, spec: dict, kicker: str) -> plan.Scene:
     most = len(row)
 
     def full_check() -> None:
-        limit = capacity or room
-        if len(row) > limit:
-            raise StoryboardError(f"{where}: the row would hold {len(row)} cells, and " + (
-                f'its "capacity" is {capacity}: remove one first' if capacity else
-                f"a {b.fmt} frame has room for {room}: show fewer, or split the scene"))
+        # The frame is a hard limit. "capacity" is the limit the code keeps: a row may go past it for a moment,
+        # as code that stores and then evicts does, and the cells past the last slot show that. It has to be
+        # back within it by the end of the scene.
+        if len(row) > room:
+            raise StoryboardError(f"{where}: the row would hold {len(row)} cells, and a {b.fmt} frame has room for "
+                                  f"{room}: show fewer, or split the scene")
 
     full_check()
 
@@ -345,8 +382,12 @@ def _array(b, spec: dict, kicker: str) -> plan.Scene:
         elif verb == "move":
             if "to" not in op:
                 raise StoryboardError(f'{where}: "move" needs "to": where the cell goes, as in {{"move": 1, "to": "back"}}')
-            cell = row.pop(place(op["move"], '"move"'))
+            was = place(op["move"], '"move"')
+            cell = row.pop(was)
             row.insert(place(op["to"], '"move": "to"', extra=1), cell)
+            if row.index(cell) == was:
+                raise StoryboardError(f"{where}: \"move\" would leave {cells[cell]['text']!r} where it is (index {was}); "
+                                      f"the row is [{', '.join(name(i) for i in range(len(row)))}]")
             change["moved"] = [cell]
         elif verb == "swap":
             pair = op["swap"]
@@ -361,6 +402,8 @@ def _array(b, spec: dict, kicker: str) -> plan.Scene:
             if "to" not in op:
                 raise StoryboardError(f'{where}: "set" needs "to": the new content, as in {{"set": 1, "to": "z"}}')
             cell = row[place(op["set"], '"set"')]
+            if text(op["to"]) == cells[cell]["text"]:
+                raise StoryboardError(f"{where}: \"set\" would write {cells[cell]['text']!r} over the same text; nothing would change")
             cells.append({"id": len(cells), "text": text(op["to"])})      # the new content is a new cell in the old one's place
             row[row.index(cell)] = cells[-1]["id"]
             change["leave"], change["enter"] = cell, cells[-1]["id"]
@@ -376,7 +419,13 @@ def _array(b, spec: dict, kicker: str) -> plan.Scene:
     marked, pointed = [], {}
     free = 0.0                 # when the last operation has landed. The player replays what happens in order of
     for beat in spec.get("beats", []):     # time, so nothing may be timed before an operation worked out ahead of it.
-        for t, act, src in clock.beat(beat):
+        acts = clock.beat(beat)
+        if beat.get("at") and (marked or pointed):        # the last sentence's marks end when this sentence starts
+            start = round(max(clock.started + 0.05, free), 3)
+            ops.extend(op for op in ({"op": "mark", "t": start, "cells": []} if marked else None,
+                                     {"op": "pointers", "t": start, "at": {}} if pointed else None) if op)
+            marked, pointed = [], {}
+        for t, act, src in acts:
             did = False
             if "do" in act:
                 given = act["do"] if isinstance(act["do"], list) else [act["do"]]
@@ -401,7 +450,7 @@ def _array(b, spec: dict, kicker: str) -> plan.Scene:
                 ops.append({"op": "mark", "t": after, "cells": target})
                 marked = target
             if "pointers" in act:
-                given = act["pointers"] or {}
+                given = {} if act["pointers"] is None else act["pointers"]
                 if not isinstance(given, dict) or len(given) > 3:
                     raise StoryboardError(f'{where}: "pointers" names up to 3 places, as in {{"i": 0, "j": 3}}; not {given!r}')
                 names = {}
@@ -416,6 +465,12 @@ def _array(b, spec: dict, kicker: str) -> plan.Scene:
                 pointed = names
             if did and (target or names):                 # placed after the operations, so held long enough to be read
                 clock.t = max(clock.t, after + 1.2 + plan.GAP)
+    if capacity and len(row) > capacity:
+        raise StoryboardError(f"{where}: the scene ends with {len(row)} cells in a row whose \"capacity\" is {capacity}: "
+                              f"[{', '.join(name(i) for i in range(len(row)))}]. A row may go past its capacity for a "
+                              "moment, but something has to take a cell out again before the scene ends")
+    if not cells:
+        raise StoryboardError(f'{where}: the row is empty from start to end; give it "items", or a "do" that adds a cell')
     clock.finish()
     on = plan._math_on(b, spec)
     scene.payload["cells"] = [{"id": c["id"], "text": b.rich(c["text"], on, where)} for c in cells]
@@ -442,9 +497,11 @@ def _sequence(b, spec: dict, kicker: str) -> plan.Scene:
         if actors.count(name) > 1:
             raise StoryboardError(f"{where}: two parties are called {name!r}")
     messages = spec["messages"]
-    if not 1 <= len(messages) <= MAX_MESSAGES[b.fmt]:
+    _beats(spec, "a sequence", where)
+    if not isinstance(messages, list) or not 1 <= len(messages) <= MAX_MESSAGES[b.fmt]:
         raise StoryboardError(f"{where}: a sequence shows 1 to {MAX_MESSAGES[b.fmt]} messages in a {b.fmt} frame, not "
-                              f"{len(messages)}; split it into two scenes")
+                              + (f"{len(messages)}; split it into two scenes" if isinstance(messages, list) and messages
+                                 else "none: list them in \"messages\""))
     on = plan._math_on(b, spec)
     rows = []
     for n, m in enumerate(messages, 1):
@@ -465,13 +522,21 @@ def _sequence(b, spec: dict, kicker: str) -> plan.Scene:
     stage = plan._Stage(scene, len(rows), "message", plan._staged(spec))
     focused = None
     for beat in spec.get("beats", []):
-        for t, act, src in clock.beat(beat):
+        acts = clock.beat(beat)
+        if beat.get("at") and focused is not None:        # the last sentence's focus ends when this sentence starts
+            scene.payload["ops"].append({"op": "focus", "t": round(clock.started + 0.05, 3), "message": None})
+            focused = None
+        for t, act, src in acts:
             if "reveal" in act:
                 stage.upto(act["reveal"], t)
             if "focus" in act:
-                target = None if act["focus"] is None else int(act["focus"]) - 1
-                if target is not None and not 0 <= target < len(rows):
-                    raise StoryboardError(f"{where}: focus {target + 1} is not one of the {len(rows)} messages")
+                given = act["focus"]
+                if given is not None and (isinstance(given, bool) or not isinstance(given, int) or not 1 <= given <= len(rows)):
+                    raise StoryboardError(f'{where}: "focus" is the number of a message, from 1 to {len(rows)}; not {given!r}')
+                target = None if given is None else given - 1
+                if target is not None and target >= stage.visible:
+                    raise StoryboardError(f'{where}: "focus": {given} points at a message that is not on screen yet: the beats '
+                                          f'have revealed {stage.visible} of {len(rows)} by then. Reveal it in the same beat ("reveal": {given}) or earlier')
             else:
                 target = None if src is beat else focused
             if target != focused:

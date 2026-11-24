@@ -565,7 +565,7 @@
         }
       }
       if (best.cost >= 50) {
-        problem(`the label "${e.label}" on the arrow from "${name(e.from)}" to "${name(e.to)}" has no clear place: wherever it goes it ` +
+        problem(`the label "${tag.textContent}" on the arrow from "${name(e.from)}" to "${name(e.to)}" has no clear place: wherever it goes it ` +
           'covers a box, another label, another arrow or its own. Shorten it or leave it out' +
           (right && e.route.length > 1 ? ', or draw the diagram with "direction": "down", where labels have more room' : ''));
       }
@@ -614,77 +614,106 @@
     const top = below(root, 50), W = G.W - 2 * G.padX;
     const n = scene.most, gap = Math.max(8, Math.min(16, W / n * 0.08));
     const cw = Math.min(250, (W - gap * (n - 1)) / n), ch = Math.min(170, Math.max(84, cw * 0.8));
-    const font = Math.max(18, Math.min(60, (cw - 22) / (0.62 * Math.max(scene.longest, 2))));
+    let font = Math.max(18, Math.min(60, (cw - 22) / (0.62 * Math.max(scene.longest, 2))));
     const rowY = Math.max(top + 40, Math.min(top + (G.bottom - top - ch) / 2 - 30, G.bottom - ch - 150));
-    const startX = G.padX + (W - (n * cw + (n - 1) * gap)) / 2;
-    const xAt = i => startX + i * (cw + gap);
+    // With a capacity the slots are drawn and every cell keeps its place over one. Without, the row stays in
+    // the middle of the frame however long it is, so it slides over a little when it grows or shrinks.
+    const span = len => len * cw + Math.max(len - 1, 0) * gap;
+    // The slots sit in the middle; a cell past the last slot (a row over its capacity for a moment) stands to their right.
+    const slotsAt = scene.capacity ? Math.max(G.padX / 2, Math.min(G.padX + (W - span(scene.capacity)) / 2, G.W - G.padX / 2 - span(n))) : 0;
+    const xAt = (i, len) => (scene.capacity ? slotsAt : G.padX + (W - span(Math.max(len, 1))) / 2) + i * (cw + gap);
 
     if (scene.capacity) {
       for (let i = 0; i < scene.capacity; i++) {
         const slot = root.appendChild(el('div', 'slot'));
-        slot.style.cssText = `left:${px2(xAt(i))}px; top:${px2(rowY)}px; width:${px2(cw)}px; height:${px2(ch)}px;`;
+        slot.style.cssText = `left:${px2(xAt(i, n))}px; top:${px2(rowY)}px; width:${px2(cw)}px; height:${px2(ch)}px;`;
         enter(slot, 0.3 + i * 0.03, 0, 0.4);
       }
     }
+    const first = scene.start.length;
     const idx = [];
     if (scene.index) {
       for (let i = 0; i < n; i++) {
         const tag = root.appendChild(el('div', 'index', String(i)));
-        tag.style.cssText = `left:${px2(xAt(i))}px; top:${px2(rowY + ch + 12)}px; width:${px2(cw)}px;`;
-        idx.push(fadeTrack(tag));
+        tag.style.cssText = `left:0; top:${px2(rowY + ch + 12)}px; width:${px2(cw)}px;`;
+        idx.push({ o: fadeTrack(tag), x: track(xAt(i, first), v => { tag.style.left = `${px2(v)}px`; }) });
       }
     }
+    // The words over the two ends: the front one starts at the row's left edge, the back one ends at its right.
     const endTag = {};
     for (const side of ['front', 'back']) {
       if (!scene.ends[side]) continue;
       const tag = root.appendChild(el('div', `end ${side}`, scene.ends[side]));
-      tag.style.cssText = `top:${px2(rowY - 54)}px; width:${px2(Math.max(cw, 220))}px; left:0;`;
-      const half = Math.max(cw, 220) / 2;
-      endTag[side] = { x: track(xAt(0) + cw / 2 - half, v => { tag.style.left = `${px2(v)}px`; }), o: fadeTrack(tag), half };
+      tag.style.top = `${px2(rowY - 54)}px`;
+      const w = tag.getBoundingClientRect().width;
+      const at = len => Math.min(Math.max(side === 'front' ? xAt(0, len) + 4 : xAt(len - 1, len) + cw - w - 4, 8), G.W - w - 8);
+      endTag[side] = { x: track(at(Math.max(first, 1)), v => { tag.style.left = `${px2(v)}px`; }), o: fadeTrack(tag), w, at };
     }
+    let crowded = false;
+    const ends = len => {                                 // both end labels over a row too short to hold them side by side
+      if (endTag.front && endTag.back && len > 1 && !crowded && endTag.front.w + endTag.back.w + 28 > span(len)) {
+        crowded = true;
+        problem(`the words over the two ends ("${scene.ends.front}", "${scene.ends.back}") run into each other when the row holds ${len} cells; shorten them`, true);
+      }
+    };
     const cells = new Map();
     for (const c of scene.cells) {
       const box = root.appendChild(el('div', 'cell'));
       box.style.cssText = `left:0; top:${px2(rowY)}px; width:${px2(cw)}px; height:${px2(ch)}px; font-size:${px2(font)}px;`;
       const mark = box.appendChild(el('div', 'ring'));
-      box.appendChild(el('div', 'text', c.text));
-      cells.set(c.id, { a: anim(box, { o: 0, x: xAt(0), y: -46 }), mark: fadeTrack(mark), x: null });
+      const text = box.appendChild(el('div', 'text', c.text));
+      cells.set(c.id, { a: anim(box, { o: 0, x: xAt(0, first), y: -46 }), mark: fadeTrack(mark), x: null, box, text });
+    }
+    // The texts are measured: a text wider than its cell would run over its neighbours and both would be unreadable.
+    const widest = () => Math.max(...[...cells.values()].map(c => c.text.scrollWidth));
+    while (font > 15 && widest() > cw - 18) { font -= 1; for (const c of cells.values()) c.box.style.fontSize = `${px2(font)}px`; }
+    if (widest() > cw - 14) {
+      const long = scene.cells.reduce((p, c) => (cells.get(c.id).text.scrollWidth > cells.get(p.id).text.scrollWidth ? c : p));
+      problem(`"${cells.get(long.id).text.textContent}" does not fit in a cell when the row has room for ${n}: there a cell holds about ` +
+        `${Math.max(1, Math.floor((cw - 18) / (font * 0.6)))} characters. Shorten the texts, or show fewer cells at once`);
     }
     const pointers = new Map();
     const pointer = name => {
       if (!pointers.has(name)) {
         const tag = root.appendChild(el('div', 'pointer'));
-        tag.appendChild(el('div', 'arrow', '▲'));
+        const arrow = tag.appendChild(el('div', 'arrow', '▲'));
         tag.appendChild(el('div', 'name', name));
         tag.style.cssText = `left:0; top:${px2(rowY + ch + (scene.index ? 52 : 14))}px; width:${px2(cw)}px;`;
-        pointers.set(name, { a: anim(tag, { o: 0, x: xAt(0) }), shown: false });
+        pointers.set(name, { a: anim(tag, { o: 0, x: xAt(0, first), y: 0 }), shown: false,
+          arrow: switcher(true, on => { arrow.style.visibility = on ? 'visible' : 'hidden'; }) });
       }
       return pointers.get(name);
     };
 
     let row = [];
     const arrange = (t, next, dur) => {                   // everyone in `next` goes to their place; the labels follow the row
+      const len = next.length;
       next.forEach((id, i) => {
-        const c = cells.get(id);
-        if (c.x === null) { c.a.x.to(Math.max(t - 0.01, 0), xAt(i), 0); c.x = xAt(i); c.a.o.to(t, 1, 0.4); c.a.y.to(t, 0, 0.45); }
-        else if (c.x !== xAt(i)) { c.a.x.to(t, xAt(i), dur, easeInOut); c.x = xAt(i); }
+        const c = cells.get(id), x = xAt(i, len);
+        if (c.x === null) { c.a.x.to(Math.max(t - 0.01, 0), x, 0); c.x = x; c.a.o.to(t, 1, 0.4); c.a.y.to(t, 0, 0.45); }
+        else if (c.x !== x) { c.a.x.to(t, x, dur, easeInOut); c.x = x; }
       });
-      idx.forEach((tr, i) => tr.to(t, i < next.length ? 1 : 0, 0.3));
-      if (endTag.front) endTag.front.o.to(t, next.length ? 1 : 0, 0.3);
+      idx.forEach((tr, i) => { tr.x.to(t, xAt(i, len), dur, easeInOut); tr.o.to(t, i < len ? 1 : 0, 0.3); });
+      if (endTag.front) { endTag.front.o.to(t, len ? 1 : 0, 0.3); if (len) endTag.front.x.to(t, endTag.front.at(len), dur, easeInOut); }
       if (endTag.back) {
-        endTag.back.o.to(t, next.length > 1 ? 1 : 0, 0.3);
-        if (next.length > 1) endTag.back.x.to(t, xAt(next.length - 1) + cw / 2 - endTag.back.half, dur, easeInOut);
+        endTag.back.o.to(t, len > 1 ? 1 : 0, 0.3);
+        if (len > 1) endTag.back.x.to(t, endTag.back.at(len), dur, easeInOut);
       }
+      ends(len);
       row = next;
     };
-    scene.start.forEach((id, i) => { const c = cells.get(id); c.a.x.to(0, xAt(i), 0); c.x = xAt(i); c.a.o.to(0.35 + i * 0.05, 1, 0.4); c.a.y.to(0.35 + i * 0.05, 0, 0.45); });
-    idx.forEach((tr, i) => tr.to(0.4, i < scene.start.length ? 1 : 0, 0.3));
-    if (endTag.front) endTag.front.o.to(0.5, scene.start.length ? 1 : 0, 0.3);
-    if (endTag.back && scene.start.length > 1) { endTag.back.x.to(0, xAt(scene.start.length - 1) + cw / 2 - endTag.back.half, 0); endTag.back.o.to(0.5, 1, 0.3); }
+    scene.start.forEach((id, i) => { const c = cells.get(id); c.a.x.to(0, xAt(i, first), 0); c.x = xAt(i, first); c.a.o.to(0.35 + i * 0.05, 1, 0.4); c.a.y.to(0.35 + i * 0.05, 0, 0.45); });
+    idx.forEach((tr, i) => tr.o.to(0.4, i < first ? 1 : 0, 0.3));
+    if (endTag.front) endTag.front.o.to(0.5, first ? 1 : 0, 0.3);
+    if (endTag.back && first > 1) endTag.back.o.to(0.5, 1, 0.3);
+    ends(first);
     row = scene.start;
 
     for (const op of scene.ops) {
       if (op.op === 'change') {
+        // Marks and pointers are about the row as it was: they go as the row starts to change.
+        for (const c of cells.values()) c.mark.to(op.t, 0, 0.2);
+        for (const p of pointers.values()) if (p.shown) { p.a.o.to(op.t, 0, 0.2); p.shown = false; }
         if (op.leave !== undefined) { const c = cells.get(op.leave); c.a.o.to(op.t, 0, 0.35); c.a.y.to(op.t, -52, 0.4); }
         if (op.verb === 'swap' || op.verb === 'move') {     // the cells that travel lift over the others on their way
           for (const id of op.moved) { const c = cells.get(id); c.a.y.to(op.t, -ch * 0.62, 0.22); c.a.y.to(op.t + 0.34, 0, 0.26); }
@@ -695,10 +724,14 @@
       } else if (op.op === 'pointers') {
         const want = new Set(Object.keys(op.at));
         for (const [name, p] of pointers) if (!want.has(name) && p.shown) { p.a.o.to(op.t, 0, 0.25); p.shown = false; }
+        const under = new Map();                          // two names under one cell: one arrow, the names one below the other
         for (const [name, id] of Object.entries(op.at)) {
-          const p = pointer(name), x = xAt(row.indexOf(id));
-          if (p.shown) p.a.x.to(op.t, x, 0.4, easeInOut);
-          else { p.a.x.to(Math.max(op.t - 0.01, 0), x, 0); p.a.o.to(op.t, 1, 0.3); p.shown = true; }
+          const level = under.get(id) || 0;
+          under.set(id, level + 1);
+          const p = pointer(name), x = xAt(row.indexOf(id), row.length);
+          p.arrow.set(Math.max(op.t - 0.01, 0), level === 0);
+          if (p.shown) { p.a.x.to(op.t, x, 0.4, easeInOut); p.a.y.to(op.t, level * 31, 0.3); }
+          else { p.a.x.to(Math.max(op.t - 0.01, 0), x, 0); p.a.y.to(Math.max(op.t - 0.01, 0), level * 31, 0); p.a.o.to(op.t, 1, 0.3); p.shown = true; }
         }
       }
     }
@@ -791,6 +824,24 @@
     const y0 = top + (legend ? 50 : 6);
     const svg = canvas(root);
     const span = axis.max - axis.min;
+    // Axis labels are placed only where they do not run into each other: every second or third one if need be.
+    const marks = (list, y, most) => {
+      const probe = root.appendChild(el('div', 'tick'));
+      probe.style.cssText = 'overflow:visible; width:auto;';
+      const made = list.map(([x, text]) => { probe.textContent = text; return { x, text, w: Math.min(probe.getBoundingClientRect().width + 4, most), full: probe.getBoundingClientRect().width }; });
+      probe.remove();
+      let step = 1;
+      const clash = st => { const kept = made.filter((_, i) => i % st === 0); return kept.some((m, i) => i && m.x - kept[i - 1].x < (m.w + kept[i - 1].w) / 2 + 16); };
+      while (step < made.length && clash(step)) step++;
+      made.forEach((m, i) => {
+        if (i % step) return;
+        const tick = root.appendChild(el('div', 'tick', m.text));
+        tick.style.cssText = `left:${px2(Math.min(Math.max(m.x - m.w / 2, 4), G.W - m.w - 4))}px; top:${px2(y)}px; width:${px2(m.w)}px;`;
+        enter(tick, 0.35, 0, 0.4);
+      });
+      const cut = made.find((m, i) => i % step === 0 && m.full > most + 1);
+      if (cut) problem(`the name "${cut.text}" along the bottom of the chart is too long for its place and ends in "…"`, true);
+    };
 
     if (scene.chart === 'bar') {
       const R = scene.labels.length;
@@ -798,7 +849,7 @@
       let labelW = 0;
       for (const text of scene.labels) { probe.textContent = text; labelW = Math.max(labelW, probe.getBoundingClientRect().width); }
       probe.remove();
-      labelW = Math.min(labelW + 26, W * 0.34);
+      labelW = Math.min(labelW + 26, W * (G === FORMATS.tall ? 0.42 : 0.34));
       let valueW = 0;
       const vprobe = root.appendChild(el('div', 'value'));
       for (const s of scene.series) for (const text of s.texts) { vprobe.textContent = text; valueW = Math.max(valueW, vprobe.getBoundingClientRect().width); }
@@ -807,29 +858,40 @@
       const xOf = v => x0 + (v - axis.min) / span * (x1 - x0), zero = xOf(Math.min(Math.max(0, axis.min), axis.max));
       const rowH = Math.min(86, (G.bottom - y0 - 64) / R), barH = Math.min(46, rowH * 0.68 / S);
       const bottom = y0 + rowH * R;
-      for (const [v, text] of axis.ticks) {
+      for (const [v] of axis.ticks) {
         const line = svgEl('line', { class: v === 0 ? 'base' : 'grid', x1: px2(xOf(v)), x2: px2(xOf(v)), y1: px2(y0 - 4), y2: px2(bottom + 6) }, svg);
         fadeTrack(line).to(0.3, 1, 0.4);
-        const tick = root.appendChild(el('div', 'tick', text));
-        tick.style.cssText = `left:${px2(xOf(v) - 60)}px; top:${px2(bottom + 12)}px; width:120px;`;
-        enter(tick, 0.35, 0, 0.4);
       }
+      marks(axis.ticks.map(([v, text]) => [xOf(v), text]), bottom + 12, 200);
       if (axis.title) {
         const title = root.appendChild(el('div', 'axistitle', axis.title));
         title.style.cssText = `right:${G.padX}px; top:${px2(bottom + 44)}px;`;
         enter(title, 0.4, 0, 0.4);
       }
+      // A name too long for one line beside its bar takes two, then a smaller size. One that still does not fit
+      // would lose its beginning or its end, and a name is not the author's to shorten: the check stops there.
+      const names = scene.labels.map((text, r) => {
+        const label = root.appendChild(el('div', 'rowlabel', text));
+        label.style.cssText = `left:${G.padX}px; top:${px2(y0 + rowH * r)}px; width:${px2(labelW - 16)}px; height:${px2(rowH)}px;`;
+        return label;
+      });
+      const spill = label => label.scrollWidth > label.clientWidth + 1 || label.scrollHeight > label.clientHeight + 1;
+      for (let size = 25; size >= 18 && names.some(spill); size--) names.forEach(label => { label.style.fontSize = `${size}px`; });
+      const lost = names.find(spill);
+      if (lost) {
+        problem(`the name "${lost.textContent}" does not fit beside its bar and would be cut off; ` +
+          (G === FORMATS.tall ? 'a wide frame has more room for names, or ' : '') + 'show these rows in a table scene instead');
+      }
       const rows = scene.labels.map((text, r) => {
         const cy = y0 + rowH * (r + 0.5);
-        const label = root.appendChild(el('div', 'rowlabel', text));
-        label.style.cssText = `left:${G.padX}px; top:${px2(cy - rowH / 2)}px; width:${px2(labelW - 16)}px; height:${px2(rowH)}px;`;
+        const label = names[r];
         const dim = [anim(label, { o: 0 })];
         dim[0].o.to(0.35 + r * 0.04, 1, 0.4);
         const bars = scene.series.map((s, i) => {
           const v = s.values[r], y = cy - (S * barH + (S - 1) * 4) / 2 + i * (barH + 4);
           const a = Math.min(zero, xOf(v)), z = Math.max(zero, xOf(v));
           const bar = root.appendChild(el('div', `bar c${i + 1}`));
-          bar.style.cssText = `left:${px2(a)}px; top:${px2(y)}px; width:${px2(Math.max(z - a, 2))}px; height:${px2(barH)}px; transform-origin:${v < 0 ? 'right' : 'left'} center;`;
+          bar.style.cssText = `left:${px2(a)}px; top:${px2(y)}px; width:${px2(v === 0 ? 0 : Math.max(z - a, 2))}px; height:${px2(barH)}px; transform-origin:${v < 0 ? 'right' : 'left'} center;`;
           const value = root.appendChild(el('div', 'value', s.texts[r]));
           value.style.cssText = v < 0 ? `right:${px2(G.W - a + 10)}px; top:${px2(y)}px; height:${px2(barH)}px;` : `left:${px2(z + 10)}px; top:${px2(y)}px; height:${px2(barH)}px;`;
           value.style.fontSize = `${px2(Math.max(18, Math.min(28, barH * 0.72)))}px`;
@@ -871,12 +933,8 @@
       tick.style.cssText = `left:${px2(G.padX)}px; top:${px2(yOf(v) - 16)}px; width:96px;`;
       enter(tick, 0.35, 0, 0.4);
     }
-    for (const [v, text] of xs.ticks) {
-      const tick = root.appendChild(el('div', 'tick', text));
-      tick.style.cssText = `left:${px2(xOf(v) - 90)}px; top:${px2(yBottom + 14)}px; width:180px;`;
-      enter(tick, 0.35, 0, 0.4);
-      svgEl('line', { class: 'nick', x1: px2(xOf(v)), x2: px2(xOf(v)), y1: px2(yBottom), y2: px2(yBottom + 8) }, svg);
-    }
+    for (const [v] of xs.ticks) svgEl('line', { class: 'nick', x1: px2(xOf(v)), x2: px2(xOf(v)), y1: px2(yBottom), y2: px2(yBottom + 8) }, svg);
+    marks(xs.ticks.map(([v, text]) => [xOf(v), text]), yBottom + 14, G === FORMATS.tall ? 150 : 200);
     svgEl('line', { class: 'base', x1: px2(x0), x2: px2(x1), y1: px2(yBottom), y2: px2(yBottom) }, svg);
     const titles = [[axis.title, `left:${G.padX}px; top:${px2(y0 - 30)}px;`], [xs.title, `right:${G.padX}px; top:${px2(yBottom + 50)}px;`]];
     for (const [text, where] of titles) {
@@ -906,13 +964,28 @@
       } else if (op.op === 'highlight') {
         spots.forEach(s => { s.dot.to(op.t, 0, 0.2); s.tag.to(op.t, 0, 0.2); });
         spots.length = 0;
-        op.cells.forEach(c => {
-          const s = scene.series[c.series], X = xOf(xs.at[c.row]), Y = yOf(s.values[c.row]);
+        // Each point's number goes above it, or below, or further off: wherever it covers no other point's
+        // number and no other highlighted point.
+        const boxes = [], dotsAt = op.cells.map(c => [xOf(xs.at[c.row]), yOf(scene.series[c.series].values[c.row])]);
+        op.cells.forEach((c, n) => {
+          const s = scene.series[c.series], [X, Y] = dotsAt[n];
           const dot = svgEl('circle', { class: `spot c${c.series + 1}`, cx: px2(X), cy: px2(Y), r: 11 }, svg);
           const tag = root.appendChild(el('div', 'value lit pin', s.texts[c.row]));
           const r = tag.getBoundingClientRect();
-          tag.style.left = `${px2(Math.min(Math.max(X - r.width / 2, x0), x1 - r.width))}px`;
-          tag.style.top = `${px2(Y - r.height - 18 < yTop - 30 ? Y + 18 : Y - r.height - 18)}px`;
+          const left = Math.min(Math.max(X - r.width / 2, x0), x1 - r.width);
+          const free = topY => topY > yTop - 34 && topY + r.height < yBottom + 4 &&
+            !boxes.some(q => left < q[2] + 6 && left + r.width > q[0] - 6 && topY < q[3] + 6 && topY + r.height > q[1] - 6) &&
+            !dotsAt.some(([x, y], j) => j !== n && x > left - 14 && x < left + r.width + 14 && y > topY - 14 && y < topY + r.height + 14);
+          const tries = [Y - r.height - 18, Y + 18, Y - 2 * r.height - 28, Y + r.height + 28, Y - 3 * r.height - 38, Y + 2 * r.height + 38];
+          let topY = tries.find(free);
+          if (topY === undefined) {
+            topY = Y - r.height - 18 < yTop - 30 ? Y + 18 : Y - r.height - 18;
+            problem(`the numbers of ${op.cells.length} highlighted points lie on top of each other (${op.cells.map(k => scene.series[k.series].texts[k.row]).join(', ')}); ` +
+              'highlight them one at a time, or points that are further apart', true);
+          }
+          boxes.push([left, topY, left + r.width, topY + r.height]);
+          tag.style.left = `${px2(left)}px`;
+          tag.style.top = `${px2(topY)}px`;
           const pair = { dot: fadeTrack(dot), tag: fadeTrack(tag) };
           pair.dot.to(op.t, 1, 0.25); pair.tag.to(op.t + 0.05, 1, 0.25);
           spots.push(pair);

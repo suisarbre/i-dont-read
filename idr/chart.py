@@ -80,31 +80,66 @@ def _titled(name: str, unit: str) -> str:
 
 def _chart(b, spec: dict, kicker: str) -> plan.Scene:
     where = spec.get("heading") or "chart"
-    plan._only(spec, {"type", "heading", "sub", "beats", "file", "lines", "rows", "ref", "encoding", "expect", "x", "y", "kind", "spacing"},
+    if "sub" in spec:
+        raise StoryboardError(f'{where}: a chart writes its own line under the heading (the file, the rows and the '
+                              'columns), so it takes no "sub"; say the rest in the narration')
+    plan._only(spec, {"type", "heading", "beats", "file", "lines", "rows", "ref", "encoding", "expect", "x", "y", "kind", "spacing"},
                "a chart scene", where)
+    if not isinstance(spec.get("beats"), list) or not spec["beats"]:
+        raise StoryboardError(f'{where}: a chart needs at least one beat: a sentence that says what the numbers show')
+    for key in ("expect", "encoding", "ref"):
+        if spec.get(key) is not None and not isinstance(spec[key], str):
+            raise StoryboardError(f'{where}: "{key}" is a piece of text, not {spec[key]!r}')
+
+    def span(key: str, what: str) -> tuple[int, int]:
+        given = spec[key]
+        if not (isinstance(given, list) and len(given) == 2 and all(isinstance(v, int) and not isinstance(v, bool) for v in given)):
+            raise StoryboardError(f'{where}: "{key}" is [first, last], two whole numbers counting {what} from 1; not {given!r}')
+        return given[0], given[1]
+
+    def table(read, *args):
+        try:
+            return read(*args)
+        except ValueError as problem:                     # the advice for a table scene (write it out) does not hold here
+            text = str(problem)
+            for advice in (". If the table is not written that way", "; write the table out with"):
+                if advice in text:
+                    text = text.split(advice)[0] + ('. A chart is drawn from a table in a file of the source (a .csv or .tsv '
+                                                    'with "rows", a Markdown or LaTeX table with "lines"); numbers found '
+                                                    "anywhere else are shown in a table or stats scene")
+            raise StoryboardError(text if text.startswith(str(name)) else f"{where}: {text}") from None
+
     name = spec.get("file")
+    if name is not None and not isinstance(name, str):
+        raise StoryboardError(f'{where}: "file" is the path of a file in the source, not {name!r}')
     if not name:
         raise StoryboardError(f'{where}: a chart is drawn from a file of the source: "file" with "rows" (a .csv or .tsv) '
                               'or with "lines" (a Markdown or LaTeX table). Numbers cannot be typed into a chart; if the '
                               "source has no such file, show the numbers it does give in a table or stats scene")
     at_ref = f"  ·  as of {spec['ref']}" if spec.get("ref") else ""
-    if name.lower().endswith((".csv", ".tsv")):
+    if isinstance(name, str) and name.lower().endswith((".csv", ".tsv")):
         if "rows" not in spec:
             raise StoryboardError(f'{name}: a chart from a CSV file takes "rows": [first, last] (data rows, after the header)')
-        first, last = spec["rows"]
+        if "lines" in spec:
+            raise StoryboardError(f'{name}: a CSV file is read by "rows" (data rows, after the header); it takes no "lines"')
+        first, last = span("rows", "data rows")
         where = f"{name} rows {first}-{last}"
-        header, rows = source.csv_table(b.root, name, first, last, None, spec.get("ref"), spec.get("encoding"))
-        if spec.get("expect") and spec["expect"] not in ",".join(header):
-            raise StoryboardError(f"{where}: the header is {', '.join(header)!r}, not the expected {spec['expect']!r}")
+        header, rows = table(source.csv_table, b.root, name, first, last, None, spec.get("ref"), spec.get("encoding"))
+        # `expect` pins what is read: text from the header, or from the first row shown, which catches rows that moved.
+        if spec.get("expect") and spec["expect"] not in ",".join(header) and spec["expect"] not in ",".join(rows[0]):
+            raise StoryboardError(f"{where}: neither the header ({','.join(header)!r}) nor row {first} ({','.join(rows[0])!r}) "
+                                  f"holds the expected {spec['expect']!r}; the file has changed, so fix the rows")
         sub = f"{name}  ·  {f'row {first}' if first == last else f'rows {first}–{last}'}{at_ref}"
     else:
         if "lines" not in spec:
             raise StoryboardError(f'{name}: a chart from a table in a document takes "lines": [first, last] around the table')
-        first, last = spec["lines"]
+        if "rows" in spec:
+            raise StoryboardError(f'{name}: a table in a document is read by "lines" (the lines it is on); it takes no "rows"')
+        first, last = span("lines", "lines of the file")
         where = f"{name}:{first}-{last}"
-        in_tex = name.lower().endswith((".tex", ".ltx"))
-        header, _, rows, first_line = (source.tex_table if in_tex else source.md_table)(
-            b.root, name, first, last, spec.get("ref"), spec.get("encoding"))
+        in_tex = isinstance(name, str) and name.lower().endswith((".tex", ".ltx"))
+        header, _, rows, first_line = table(source.tex_table if in_tex else source.md_table,
+                                            b.root, name, first, last, spec.get("ref"), spec.get("encoding"))
         if spec.get("expect") and spec["expect"] not in first_line:
             raise StoryboardError(f"{where}: line {first} is {first_line.strip()[:60]!r}, not the expected "
                                   f"{spec['expect']!r}; the file has changed, so fix the line range")
@@ -115,7 +150,10 @@ def _chart(b, spec: dict, kicker: str) -> plan.Scene:
             if not 1 <= value <= len(header):
                 raise StoryboardError(f"{where}: {what} is column {value}, and the table has {len(header)}")
             return value - 1
-        if value in header:
+        if isinstance(value, str) and header.count(value) > 1:
+            raise StoryboardError(f"{where}: {what} is {value!r}, and {header.count(value)} columns are called that; "
+                                  f"give the column's number instead (the first is 1): {', '.join(header)}")
+        if isinstance(value, str) and value in header:
             return header.index(value)
         raise StoryboardError(f"{where}: {what} is {value!r}, and the columns are {', '.join(header)}")
 
@@ -131,6 +169,16 @@ def _chart(b, spec: dict, kicker: str) -> plan.Scene:
     if not 1 <= len(wanted) <= most:
         raise StoryboardError(f"{where}: a {kind} chart draws 1 to {most} columns of numbers, not {len(wanted)}")
     ys = [column(v, '"y"') for v in wanted]
+    if xi in ys or len(set(ys)) < len(ys):
+        raise StoryboardError(f'{where}: "x" and each column of "y" must be different columns; '
+                              f"{header[xi]!r} is given twice" if xi in ys else
+                              f'{where}: "y" names the column {header[next(y for y in ys if ys.count(y) > 1)]!r} twice')
+    try:                                                # column names that are all numbers are a first row of data
+        if all(reading(cell) is not None for cell in header):
+            b.warn(where, f"the first row of {name} ({', '.join(header)}) looks like data, not column names; if the file "
+                   "has no header row, this chart has lost its first row and names its columns by numbers")
+    except ValueError:
+        pass
     limit = MAX_BARS if kind == "bar" else MAX_POINTS
     if len(rows) > limit:
         raise StoryboardError(f"{where}: {len(rows)} rows are too many for a {kind} chart ({limit} at most); "
@@ -191,6 +239,10 @@ def _chart(b, spec: dict, kicker: str) -> plan.Scene:
 
     labels = [row[xi] for row in rows]
     payload: dict = {"chart": kind, "labels": labels, "series": series, "axis": axis}
+    for one in series:
+        if len(series) > 1 and max(abs(v) for v in one["values"] if v is not None) < 0.02 * (top - bottom):
+            b.warn(where, f"every value of {one['name']!r} is under 2% of the axis, which runs to {plot.number(top)} for "
+                   "the other column, so it will lie flat along the bottom; draw it in a chart of its own")
     spacing = spec.get("spacing")
     if spacing not in (None, "even", "numbers") or (spacing and kind != "line"):
         raise StoryboardError(f'{where}: "spacing" is "even" or "numbers", on a line chart: whether the rows are spread '
@@ -232,10 +284,6 @@ def _chart(b, spec: dict, kicker: str) -> plan.Scene:
             show = max(1, -(-len(labels) // 8))
             payload["x"] = {"numeric": False, "at": list(range(len(labels))), "min": 0, "max": len(labels) - 1,
                             "ticks": [[i, labels[i]] for i in range(0, len(labels), show)], "title": header[xi]}
-    for text in labels if kind == "bar" else []:
-        if len(text) > 28:
-            b.warn(where, f"the name {text[:24]!r}... is over 28 characters and will be cut on the chart")
-
     columns = ", ".join(header[i] for i in ys)
     scene = b.scene("chart", kicker, {**spec, "sub": f"{sub}  ·  {columns} by {header[xi]}"}, sub_is_source=True, **payload)
     scene.sfx.append((0.0, "whoosh"))
@@ -245,6 +293,10 @@ def _chart(b, spec: dict, kicker: str) -> plan.Scene:
         if not isinstance(item, dict):
             raise StoryboardError(f'{where}: {what} takes an object such as {{"x": "{labels[0]}"}}, or a list of them; not {item!r}')
         plan._only(item, {"x", "row", "series", "as"}, f'"{what}"', where)
+        if "row" in item and "x" in item:
+            raise StoryboardError(f'{where}: {what} names its row by "x" (the name the file gives it) or by "row" (its number), not both')
+        if "as" in item and not (isinstance(item["as"], str) and re.fullmatch(r"\w+", item["as"])):
+            raise StoryboardError(f'{where}: "as" is a short name to quote the cell by, such as "small"; not {item["as"]!r}')
         if "row" in item:
             if isinstance(item["row"], bool) or not isinstance(item["row"], int) or not 1 <= item["row"] <= len(rows):
                 raise StoryboardError(f"{where}: {what} names row {item['row']!r}, and the chart has rows 1 to {len(rows)}")
@@ -259,11 +311,14 @@ def _chart(b, spec: dict, kicker: str) -> plan.Scene:
         else:
             raise StoryboardError(f'{where}: {what} needs "x" (the name of a row, as the file writes it) or "row" (its number)')
         s = 0
+        names = [x["name"] for x in series]
         if "series" in item:
-            names = [x["name"] for x in series]
             if item["series"] not in names:
                 raise StoryboardError(f"{where}: {what} names the column {item['series']!r}; the chart draws {', '.join(names)}")
             s = names.index(item["series"])
+        elif len(series) > 1:
+            raise StoryboardError(f'{where}: {what} must say which column it means, since the chart draws {len(series)}: '
+                                  f'add "series": "{names[0]}" (or {", ".join(repr(n) for n in names[1:])})')
         if series[s]["values"][r] is None:
             raise StoryboardError(f"{where}: {what} points at an empty cell ({labels[r]}, {series[s]['name']})")
         return {"row": r, "series": s}
@@ -271,6 +326,13 @@ def _chart(b, spec: dict, kicker: str) -> plan.Scene:
     clock = plan._Clock(b, scene, where)
     stage = plan._Stage(scene, len(series), "series", plan._staged(spec))
     lit: list[dict] = []
+    drawn = [v for one in series for v in one["values"] if v is not None]      # every number on the chart, for the check below
+    for text in labels:
+        try:
+            got = reading(text)
+            drawn += [got[0]] if got else []
+        except ValueError:
+            drawn += [float(d) for d in re.findall(r"\d+(?:\.\d+)?", text)]
     for beat in spec.get("beats", []):
         made, named = [], {}
         for act in plan._actions({"beats": [beat]}):       # the cells this sentence points at, to quote them in it
@@ -279,7 +341,9 @@ def _chart(b, spec: dict, kicker: str) -> plan.Scene:
                     at = spot(item, "highlight")
                     made.append(at)
                     if isinstance(item, dict) and item.get("as"):
-                        named[str(item["as"])] = at
+                        if item["as"] in named:
+                            raise StoryboardError(f'{where}: two highlights in one sentence are both named "{item["as"]}"')
+                        named[item["as"]] = at
 
         def quoted(text):
             def fill(m):
@@ -296,13 +360,32 @@ def _chart(b, spec: dict, kicker: str) -> plan.Scene:
                 return series[at["series"]]["texts"][at["row"]] if field == "value" else labels[at["row"]]
             return re.sub(r"\{(?:(\w+)\.)?(value|x)\}", fill, text) if isinstance(text, str) else text
 
+        # A number typed into the sentence is not checked against anything. One that the chart does not draw is
+        # worth a second look: it may be a cell retyped wrongly, or a claim the file does not make.
+        if isinstance(beat.get("say"), str):
+            for token in re.findall(r"(?<![\w{.])\d[\d,]*(?:\.\d+)?(?![\w}])", re.sub(r"\{[\w.]+\}", " ", beat["say"])):
+                try:
+                    typed = float(token.replace(",", ""))
+                except ValueError:
+                    continue
+                if not any(abs(typed - v) <= 1e-9 * max(1.0, abs(v)) for v in drawn):
+                    b.warn(where, f"the sentence {beat['say'][:40]!r}... says {token}, which is not a number this chart "
+                           "draws; quote a cell with {value} or {x} where you can, and check any other number against the source")
         beat = {**beat, **{k: quoted(beat[k]) for k in ("say", "speak") if k in beat}}
-        for t, act, src in clock.beat(beat):
+        acts = clock.beat(beat)
+        if beat.get("at") and lit:                        # the last sentence's highlight ends when this sentence starts
+            ops.append({"op": "highlight", "t": round(clock.started + 0.05, 3), "cells": []})
+            lit = []
+        for t, act, src in acts:
             if "reveal" in act:
                 stage.upto(act["reveal"], t)
             if "highlight" in act:
                 given = act["highlight"]
                 target = [] if given is None else [spot(i, "highlight") for i in (given if isinstance(given, list) else [given])]
+                for cell in target:
+                    if cell["series"] >= stage.visible:
+                        raise StoryboardError(f"{where}: a highlight points at {series[cell['series']]['name']!r} before that "
+                                              f'column is drawn; reveal it in the same beat or an earlier one ("reveal": {cell["series"] + 1})')
             else:
                 target = [] if src is beat else lit
             if target != lit:
@@ -311,6 +394,9 @@ def _chart(b, spec: dict, kicker: str) -> plan.Scene:
                     scene.sfx.append((round(t + 0.05, 3), "tick"))
                 lit = target
     stage.upto(len(series), clock.t)
+    shown = min((op["t"] for op in ops if op["op"] == "reveal"), default=0.0)
+    if shown > plan.LEAD + 1.0:
+        b.warn(where, f"the chart is empty for the first {shown:.1f} seconds; reveal the first column when the first sentence starts")
     last = max((op["t"] for op in ops if op["op"] == "reveal"), default=0.0)
     clock.finish(minimum=last + (1.4 if kind == "line" else 1.2 + 0.04 * len(rows)))    # drawn before the scene ends
     return scene
