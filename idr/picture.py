@@ -13,7 +13,7 @@ from pathlib import Path
 
 from .env import cache_dir, find_chrome
 
-Region = list[float]   # [x, y, width, height] as fractions of the picture
+Region = list[list[float]]   # one or more [x, y, width, height] boxes, as fractions of the picture (one per line of text)
 
 
 def _store(key: str) -> Path:
@@ -22,8 +22,17 @@ def _store(key: str) -> Path:
     return folder / hashlib.sha256(key.encode()).hexdigest()[:20]
 
 
-def _union(rects: list[tuple[float, float, float, float]]) -> tuple[float, float, float, float]:
-    return (min(r[0] for r in rects), min(r[1] for r in rects), max(r[2] for r in rects), max(r[3] for r in rects))
+def _by_line(rects: list[tuple[float, float, float, float]]) -> list[tuple[float, float, float, float]]:
+    """Join the pieces of a match that sit on the same line (justified text gives one piece per word)."""
+    lines: list[list[float]] = []
+    for left, bottom, right, top in sorted(rects, key=lambda r: (-r[3], r[0])):
+        middle = (bottom + top) / 2
+        if lines and lines[-1][1] <= middle <= lines[-1][3]:
+            last = lines[-1]
+            last[0], last[1], last[2], last[3] = min(last[0], left), min(last[1], bottom), max(last[2], right), max(last[3], top)
+        else:
+            lines.append([left, bottom, right, top])
+    return [tuple(line) for line in lines]
 
 
 def _pdf(path: Path, number: int, finds: list[str]) -> dict:
@@ -46,9 +55,10 @@ def _pdf(path: Path, number: int, finds: list[str]) -> dict:
             found[phrase] = None
             continue
         index, count = hit
-        rects = [text.get_rect(i) for i in range(text.count_rects(index, count))]   # (left, bottom, right, top) in points
-        left, bottom, right, top = _union(rects)
-        found[phrase] = [left / width, 1 - top / height, (right - left) / width, (top - bottom) / height]
+        # One rectangle per line the phrase runs over, as (left, bottom, right, top) in points.
+        rects = [text.get_rect(i) for i in range(text.count_rects(index, count))]
+        found[phrase] = [[left / width, 1 - top / height, (right - left) / width, (top - bottom) / height]
+                         for left, bottom, right, top in _by_line(rects)]
     return {"path": png, "found": found}
 
 
@@ -85,8 +95,8 @@ def _web(url: str, finds: list[str]) -> dict:
                     if box and box["width"] > 0 and box["height"] > 0:
                         break
                     box = None
-            found[phrase] = None if not box or box["y"] >= height else [
-                box["x"] / width, box["y"] / height, box["width"] / width, min(box["height"], height - box["y"]) / height]
+            found[phrase] = None if not box or box["y"] >= height else [[
+                box["x"] / width, box["y"] / height, box["width"] / width, min(box["height"], height - box["y"]) / height]]
         page.screenshot(path=str(png), full_page=True, clip={"x": 0, "y": 0, "width": width, "height": height})
         browser.close()
     meta.write_text(json.dumps(found))
@@ -123,6 +133,7 @@ def resolve(root: Path, spec: dict, finds: list[str]) -> dict:
             label = spec["file"]
     with Image.open(out["path"]) as picture:
         out["iw"], out["ih"] = picture.size
-    stat = out["path"].stat()
-    out.update(label=label, stamp=f"{stat.st_mtime_ns}-{stat.st_size}")
+    # The stamp is the picture's content, not its timestamp: a page captured again with the same
+    # result must not make its scene look changed.
+    out.update(label=label, stamp=hashlib.sha256(out["path"].read_bytes()).hexdigest()[:16])
     return out

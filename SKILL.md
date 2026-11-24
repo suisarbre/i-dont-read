@@ -43,6 +43,7 @@ python -m idr doctor
 |---|---|
 | `doctor`, or a `blocked:` message from `render`, names a help video (`ENGINE/help/ffmpeg.mp4`, `chrome.mp4`, `packages.mp4`) | That video, as your whole reply. These are ready-made, so they work even when the engine cannot run. |
 | The voice model cannot be downloaded | Render with `--silent` (captions carry the narration) and send the result together with `ENGINE/help/voice-model.mp4`. |
+| `preview` or `render` warns that this machine has no font for some characters | Install a font that covers them if you can (Noto Sans CJK for Korean, Japanese and Chinese), then run again. Otherwise the user must install one: tell them with a `steps` video. |
 | You need something from the user: a folder or file you cannot reach, a repository attached, a missing source, a choice only they can make | A short video you make now: one chapter with a `steps` scene that says what you need and how to give it to you. Use `--silent` if the voice is unavailable. |
 
 ## 3. Workflow
@@ -105,6 +106,8 @@ A **beat** is one spoken sentence plus what changes on screen when that sentence
 | `steps` | An ordered list: how to do something, or what you need from the user | `items: [{ "title", "detail", "cmd" }]` (1 to 6; `cmd` shows a command in monospace) | `reveal`: how many steps are visible from now on |
 
 Any beat can also carry `speak` (see section 6) or, with no `say`, a `hold` in seconds.
+
+Source files are read as UTF-8. For a file in another encoding, add `"encoding"` to its `code`, `diff` or `quote` scene, for example `"encoding": "cp949"`. Never guess: a wrong encoding puts text on screen that is not in the file.
 
 **Timing inside a sentence.** By default a beat's action fires when its sentence starts. To fire it on a word instead, add `"at": "a word or phrase from say"`. To do several things during one sentence, add `cues`, each with its own `at`:
 

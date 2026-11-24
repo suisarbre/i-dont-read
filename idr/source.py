@@ -9,6 +9,7 @@ import difflib
 import html
 import re
 import subprocess
+import unicodedata
 from pathlib import Path
 
 from pygments import lex
@@ -84,32 +85,57 @@ def _split(text: str) -> list[str]:
     return lines
 
 
+def _cells(text: str) -> int:
+    """Width of a line in monospace cells: wide characters (Hangul, kana, CJK, most emoji) take two."""
+    return sum(2 if unicodedata.east_asian_width(c) in "WF" else 1 for c in text)
+
+
 def _rows(raw: list[tuple[str, int | None, int | None, Line, str]]) -> list[dict]:
     """Rows for the player: (kind, old number, new number, tokens, plain text) with shared indentation removed."""
     indents = [len(plain) - len(plain.lstrip(" ")) for *_, plain in raw if plain.strip()]
     cut = min(indents) if indents else 0
     return [{"a": str(a or ""), "b": str(b or ""), "kind": kind.strip(), "plain": plain[cut:],
-             "len": len(plain[cut:]), "html": _to_html(_dedent(tokens, cut))}
+             "len": _cells(plain[cut:]), "html": _to_html(_dedent(tokens, cut))}
             for kind, a, b, tokens, plain in raw]
 
 
-def _read(root: Path, file: str, ref: str | None, scene: str) -> str:
+def _decode(data: bytes, name: str, encoding: str | None = None) -> str:
+    """Bytes to text without guessing: UTF-8 (or UTF-16 with a byte-order mark) unless the scene names an encoding.
+
+    A file decoded with the wrong encoding would put text on screen that is not in the file, so this stops instead.
+    Line endings are normalized, so a file saved on Windows reads the same as one saved anywhere else.
+    """
+    try:
+        if encoding:
+            text = data.decode(encoding)
+        elif data[:2] in (b"\xff\xfe", b"\xfe\xff"):
+            text = data.decode("utf-16")
+        else:
+            text = data.decode("utf-8-sig")
+    except (UnicodeDecodeError, LookupError):
+        raise ValueError(f'{name} is not {encoding or "UTF-8"} text. If it is in another encoding, '
+                         f'name it in the scene, for example "encoding": "cp949"') from None
+    return text.replace("\r\n", "\n").replace("\r", "\n")
+
+
+def _read(root: Path, file: str, ref: str | None, scene: str, encoding: str | None = None) -> str:
     """A file's text: as it is on disk, or as it was at a git ref."""
     if ref:
-        text = _git_show(root, ref, file)
+        text = _git_show(root, ref, file, encoding)
         if text is None:
             raise FileNotFoundError(f"{scene} scene: {file} did not exist at {ref!r}")
         return text
     path = (root / file).resolve()
     if not path.is_file():
         raise FileNotFoundError(f"{scene} scene points at a file that does not exist: {file}")
-    return path.read_text(encoding="utf-8", errors="replace")
+    return _decode(path.read_bytes(), file, encoding)
 
 
-def extract(root: Path, file: str, first: int, last: int, ref: str | None = None) -> list[dict]:
+def extract(root: Path, file: str, first: int, last: int, ref: str | None = None,
+            encoding: str | None = None) -> list[dict]:
     """Lines first..last (1-based, inclusive) of a file, as highlighted rows. `ref` reads it at a git ref."""
     path = (root / file).resolve()
-    text = _read(root, file, ref, "code").expandtabs(4)
+    text = _read(root, file, ref, "code", encoding).expandtabs(4)
     plain = _split(text)
     if not (1 <= first <= last <= len(plain)):
         raise ValueError(f"{file} has {len(plain)} lines; cannot show lines {first}-{last}")
@@ -119,14 +145,14 @@ def extract(root: Path, file: str, first: int, last: int, ref: str | None = None
 
 # --- diffs --------------------------------------------------------------------
 
-def _git_show(root: Path, ref: str, file: str) -> str | None:
+def _git_show(root: Path, ref: str, file: str, encoding: str | None = None) -> str | None:
     """The file as it was at a git ref, or None if it did not exist there."""
     done = subprocess.run(["git", "-C", str(root), "show", f"{ref}:{file}"], capture_output=True)
     if done.returncode != 0:
         if b"exists on disk, but not in" in done.stderr or b"does not exist in" in done.stderr:
             return None
         raise ValueError(f"git could not read {file} at {ref!r}: {done.stderr.decode(errors='replace').strip()}")
-    return done.stdout.decode("utf-8", errors="replace")
+    return _decode(done.stdout, f"{file} at {ref}", encoding)
 
 
 def diff(root: Path, spec: dict, first: int, last: int) -> tuple[list[dict], str]:
@@ -135,24 +161,15 @@ def diff(root: Path, spec: dict, first: int, last: int) -> tuple[list[dict], str
     Either {"file", "from": git ref, "to": git ref (default: the file on disk)}
     or {"before": path, "after": path}. Returns (rows, label for the scene).
     """
+    enc = spec.get("encoding")
     if "before" in spec:
-        old_path, new_path = (root / spec["before"]).resolve(), (root / spec["after"]).resolve()
-        for path in (old_path, new_path):
-            if not path.is_file():
-                raise FileNotFoundError(f"diff scene points at a file that does not exist: {path.name}")
-        old, new = old_path.read_text(encoding="utf-8", errors="replace"), new_path.read_text(encoding="utf-8", errors="replace")
+        new_path = (root / spec["after"]).resolve()
+        old, new = _read(root, spec["before"], None, "diff", enc), _read(root, spec["after"], None, "diff", enc)
         label = f"{spec['before']}  →  {spec['after']}"
     else:
         file, new_path = spec["file"], (root / spec["file"]).resolve()
-        old = _git_show(root, spec["from"], file) or ""
-        if spec.get("to"):
-            new = _git_show(root, spec["to"], file)
-            if new is None:
-                raise ValueError(f"{file} does not exist at {spec['to']!r}")
-        else:
-            if not new_path.is_file():
-                raise FileNotFoundError(f"diff scene points at a file that does not exist: {file}")
-            new = new_path.read_text(encoding="utf-8", errors="replace")
+        old = _git_show(root, spec["from"], file, enc) or ""
+        new = _read(root, file, spec.get("to"), "diff", enc)
         label = f"{file}  ·  {spec['from']} → {spec.get('to') or 'now'}"
     old, new = old.expandtabs(4), new.expandtabs(4)
     old_lines, new_lines = _split(old), _split(new)
@@ -182,17 +199,27 @@ def diff(root: Path, spec: dict, first: int, last: int) -> tuple[list[dict], str
 # --- prose -------------------------------------------------------------------
 
 def clean(text: str) -> str:
-    """Light Markdown cleanup so quoted prose reads as prose. Applied to excerpts and to marks alike."""
+    """Light Markdown cleanup so quoted prose reads as prose. Applied to excerpts and to marks alike.
+
+    Code spans keep their content exactly (only the backticks go): `*_ore` must not lose its
+    asterisk and underscore to the emphasis rules.
+    """
     text = re.sub(r"!\[([^\]]*)\]\([^)]*\)", r"\1", text)        # images -> alt text
     text = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", text)         # links -> link text
-    text = re.sub(r"(\*\*|__|`)", "", text)                       # bold and code markers
-    text = re.sub(r"(?<!\w)[*_](?=\S)|(?<=\S)[*_](?!\w)", "", text)  # emphasis markers
-    return re.sub(r"\s+", " ", text).strip()
+    out = []
+    for part in re.split(r"(`[^`]*`)", text):
+        if len(part) >= 2 and part[0] == part[-1] == "`":
+            out.append(part[1:-1])
+            continue
+        part = re.sub(r"(\*\*|__)", "", part)                       # bold markers
+        out.append(re.sub(r"(?<!\w)[*_](?=\S)|(?<=\S)[*_](?!\w)", "", part))   # emphasis markers
+    return re.sub(r"\s+", " ", "".join(out)).strip()
 
 
-def excerpt(root: Path, file: str, first: int, last: int, ref: str | None = None) -> list[str]:
+def excerpt(root: Path, file: str, first: int, last: int, ref: str | None = None,
+            encoding: str | None = None) -> list[str]:
     """Lines first..last of a text file as cleaned paragraphs (blank lines separate paragraphs)."""
-    lines = _read(root, file, ref, "quote").split("\n")
+    lines = _read(root, file, ref, "quote", encoding).split("\n")
     if lines and lines[-1] == "":
         lines.pop()
     if not (1 <= first <= last <= len(lines)):

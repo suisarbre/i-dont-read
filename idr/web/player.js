@@ -166,6 +166,10 @@
     font = Math.max(tall ? 20 : 18, font);
     apply(font);
     while (font > 16 && lines.getBoundingClientRect().height - 2 * padY > room) apply(--font);
+    // A wide frame never wraps, so measure: characters wider than a Latin letter (Hangul, kana, CJK,
+    // emoji) make a line longer than its character count says.
+    const widest = () => Math.max(...rows.map(r => r.src.scrollWidth));
+    if (!tall) while (font > 14 && widest() > panelW - rows[0].src.offsetLeft - 12) apply(--font);
     const box = rows.map(r => ({ top: r.row.offsetTop, h: r.row.offsetHeight, width: r.src.scrollWidth }));
     const gutter = rows[0].src.offsetLeft;
     enter(panel, t0 + 0.05, 34, 0.6);
@@ -391,7 +395,11 @@
     while (k > 0.55 && top + list.getBoundingClientRect().height > G.bottom) {
       k -= 0.05;
       inner.style.zoom = k;
-      inner.style.width = `${100 / k}%`;
+      // Keep the list as wide as its column. Browsers disagree on whether a percentage width is
+      // taken before or after zoom, so measure instead of assuming.
+      inner.style.width = '100%';
+      const got = inner.getBoundingClientRect().width, want = list.getBoundingClientRect().width;
+      if (got && Math.abs(got - want) > 1) inner.style.width = `${100 * want / got}%`;
     }
     for (const op of scene.ops) {
       if (op.op === 'reveal') { parts[op.item].o.to(op.t, 1, 0.4); parts[op.item].y.to(op.t, 0, 0.45); }
@@ -410,11 +418,25 @@
     Object.assign(layer.style, { width: `${scene.iw}px`, height: `${scene.ih}px` });
     const img = layer.appendChild(el('img'));
     img.src = scene.src;
-    const boxes = scene.boxes.map(b => {
-      const node = layer.appendChild(el('div', 'box'));
-      Object.assign(node.style, { left: `${b[0] * scene.iw}px`, top: `${b[1] * scene.ih}px`,
-        width: `${b[2] * scene.iw}px`, height: `${b[3] * scene.ih}px` });
-      return { node, o: track(0, v => { node.style.opacity = v.toFixed(3); }) };
+    // Boxes are drawn in SVG over the picture: an outline per rectangle (text found on a page gives
+    // one per line), and a shade over everything else, cut out with a mask so rectangles may overlap.
+    const NS = 'http://www.w3.org/2000/svg';
+    const make = (parent, tag, attrs = {}) => {
+      const node = parent.appendChild(document.createElementNS(NS, tag));
+      for (const [k, v] of Object.entries(attrs)) node.setAttribute(k, v);
+      return node;
+    };
+    const svg = make(layer, 'svg', { viewBox: `0 0 ${scene.iw} ${scene.ih}` });
+    const outlines = [];
+    const boxes = scene.boxes.map((rects, id) => {
+      const g = make(svg, 'g');
+      const mask = make(g, 'mask', { id: `hole${id}` });
+      make(mask, 'rect', { x: 0, y: 0, width: scene.iw, height: scene.ih, fill: '#fff' });
+      const px = rects.map(r => ({ x: r[0] * scene.iw, y: r[1] * scene.ih, width: r[2] * scene.iw, height: r[3] * scene.ih }));
+      px.forEach(r => make(mask, 'rect', { ...r, fill: '#000' }));
+      make(g, 'rect', { x: 0, y: 0, width: scene.iw, height: scene.ih, class: 'shade', mask: `url(#hole${id})` });
+      px.forEach(r => outlines.push(make(g, 'rect', { ...r, class: 'outline' })));
+      return { o: track(0, v => { g.style.opacity = v.toFixed(3); }) };
     });
     enter(frame, t0 + 0.05, 34, 0.6);
 
@@ -423,7 +445,7 @@
     const draw = () => {
       const s = frameW / cam.w;
       layer.style.transform = `translate(${(-cam.x * s).toFixed(2)}px, ${(-cam.y * s).toFixed(2)}px) scale(${s.toFixed(5)})`;
-      boxes.forEach(b => { b.node.style.borderWidth = `${(5 / s).toFixed(2)}px`; b.node.style.borderRadius = `${(10 / s).toFixed(2)}px`; });
+      outlines.forEach(o => { o.setAttribute('stroke-width', (5 / s).toFixed(2)); o.setAttribute('rx', (8 / s).toFixed(2)); });
     };
     const cx = track(0, v => { cam.x = v; });
     const cy = track(0, v => { cam.y = v; });
@@ -485,6 +507,26 @@
       window.idr.seek(0);
       last = null;
       return true;
+    },
+
+    // Characters on screen that this machine has no font for (they would show as empty boxes).
+    // Best effort: a character counts as missing when it draws exactly like a code point no font has.
+    missing() {
+      const text = document.getElementById('stage').textContent;
+      const chars = [...new Set([...text].filter(c => c.codePointAt(0) > 0x2ff && !/\s/.test(c)))];
+      if (!chars.length) return [];
+      const canvas = document.createElement('canvas');
+      canvas.width = canvas.height = 56;
+      const ctx = canvas.getContext('2d', { willReadFrequently: true });
+      const draw = ch => {
+        ctx.clearRect(0, 0, 56, 56);
+        ctx.font = '36px "IDR Sans", sans-serif';
+        ctx.textBaseline = 'top';
+        ctx.fillText(ch, 6, 6);
+        return ctx.getImageData(0, 0, 56, 56).data.join('');
+      };
+      const boxes = new Set([draw('\u{10FFFE}'), draw('\u{E0FFF}'), draw(' ')]);
+      return chars.filter(c => boxes.has(draw(c)));
     },
 
     // Draw the frame at t. Returns true when it differs from the last drawn frame.

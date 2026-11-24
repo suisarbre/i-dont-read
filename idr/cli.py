@@ -72,6 +72,15 @@ def _report(scenes: list, warnings: list[str], estimated: bool) -> float:
     return total
 
 
+def _fonts(missing: set[str]) -> None:
+    """Say so when the machine cannot draw some of the characters on screen."""
+    if missing:
+        shown = " ".join(sorted(missing)[:24])
+        print(f"warning: this machine has no font for {len(missing)} character(s) on screen: {shown}\n"
+              "         They will show as empty boxes. Install a font that covers them "
+              "(for Korean, Japanese or Chinese: Noto Sans CJK) and run this again.")
+
+
 def cmd_doctor(args) -> None:
     checks = env.doctor()
     for c in checks:
@@ -113,6 +122,7 @@ def cmd_preview(args) -> None:
             path = work / f"{i + 1:02d}.png"
             studio.still(scene, max(0.0, scene.duration - 0.75), path)
             shots.append(path)
+        _fonts(studio.missing)
     name = args.name or board_path.stem
     across, (w, h) = (4, (480, 854)) if opts["format"] == "tall" else (2, (960, 540))
     per = across * (1 if opts["format"] == "tall" else 3)
@@ -162,6 +172,7 @@ def cmd_render(args) -> None:
                 print(f"[film] scene {i + 1} ({scene.payload['type']}): {scene.duration:.1f}s, "
                       f"{stats['captured']}/{stats['frames']} frames captured, {time.time() - t1:.1f}s")
             parts.append(part)
+        _fonts(studio.missing)
     for stale in work.glob("[0-9][0-9]_*.mp4"):           # scene files from earlier versions of the storyboard
         if stale not in parts:
             stale.unlink()

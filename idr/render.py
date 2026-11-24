@@ -38,6 +38,11 @@ class Studio:
 
     def __init__(self, fmt: str = "wide"):
         self.width, self.height = SIZES[fmt]
+        self.missing: set[str] = set()   # characters this machine has no font for
+
+    def _load(self, scene: Scene) -> None:
+        self.page.evaluate("s => window.idr.load(s)", scene.payload)
+        self.missing.update(self.page.evaluate("() => window.idr.missing()"))
 
     def __enter__(self):
         self._pw = sync_playwright().start()
@@ -53,13 +58,13 @@ class Studio:
 
     def still(self, scene: Scene, t: float, path: Path) -> None:
         """Draw one frame to a PNG, for checking a layout before filming."""
-        self.page.evaluate("s => window.idr.load(s)", scene.payload)
+        self._load(scene)
         self.page.evaluate("t => window.idr.seek(t)", t)
         self.page.screenshot(path=str(path))
 
     def film(self, scene: Scene, dest: Path) -> dict:
         """Encode one scene to dest. Frames that did not change are not re-captured."""
-        self.page.evaluate("s => window.idr.load(s)", scene.payload)
+        self._load(scene)
         tmp = dest.with_name(dest.stem + ".tmp.mp4")       # a stopped render must not look finished
         ffmpeg = subprocess.Popen(
             ["ffmpeg", "-y", "-loglevel", "error", "-f", "image2pipe", "-framerate", str(FPS),
