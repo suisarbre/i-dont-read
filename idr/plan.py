@@ -345,20 +345,64 @@ def _stats(b: _Builder, spec: dict, kicker: str) -> Scene:
     return scene
 
 
-SCENES = {"code": _code, "quote": _quote, "flow": _flow, "compare": _compare, "stats": _stats}
+def _steps(b: _Builder, spec: dict, kicker: str) -> Scene:
+    items = spec["items"]
+    where = spec.get("heading") or "steps"
+    if not 1 <= len(items) <= 6:
+        raise StoryboardError(f"{where}: show 1 to 6 steps, not {len(items)}")
+    for item in items:
+        if len(item["title"]) > 48:
+            b.warn(where, f"step title {item['title'][:30]!r}... is over 48 characters")
+        if len(item.get("cmd") or "") > 48:
+            b.warn(where, f"command {item['cmd'][:30]!r}... is over 48 characters and may not fit")
+    scene = b.scene("steps", kicker, spec, items=items)
+    scene.sfx.append((0.0, "whoosh"))
+    beats = spec.get("beats", [])
+    clock = _Clock(b, scene, where)
+    stage = _Stage(scene, len(items), "item", any("reveal" in x for x in beats))
+    for beat in beats:
+        t = clock.beat(beat)
+        if "reveal" in beat:
+            stage.upto(beat["reveal"], t)
+    stage.upto(len(items), clock.t)
+    clock.finish()
+    return scene
+
+
+def _overview(b: _Builder, title: str, chapters: list[dict], intro: dict) -> Scene:
+    """Opening card that lists the chapters, so the outline is watched instead of read."""
+    scene = Scene({"type": "steps", "theme": b.theme, "kicker": "In this video", "heading": title, "sub": None,
+                   "items": [{"title": c["title"]} for c in chapters], "ops": []})
+    scene.sfx.append((0.12, "chime"))
+    for j in range(len(chapters)):
+        scene.payload["ops"].append({"op": "reveal", "t": round(0.6 + j * 0.22, 3), "item": j})
+    clock = _Clock(b, scene, title, 0.75)
+    if intro.get("say"):
+        clock.beat({"say": intro["say"], "speak": intro.get("speak")})
+    clock.finish(minimum=2.6 + 0.35 * len(chapters))
+    return scene
+
+
+SCENES = {"code": _code, "quote": _quote, "flow": _flow, "compare": _compare, "stats": _stats, "steps": _steps}
+OVERVIEW_FROM = 3   # videos with this many chapters open with a card that lists them
 
 
 def build(storyboard: dict, root: Path, theme: str, narrator, captions: bool = True) -> tuple[list[Scene], list[str]]:
     """All scenes of the video in order, plus warnings about things that may not read well."""
     b = _Builder(root, theme, narrator, captions)
     scenes: list[Scene] = []
+    if not storyboard.get("chapters"):
+        raise StoryboardError("the storyboard has no chapters")
     intro = storyboard.get("intro")
-    if intro:
+    if len(storyboard["chapters"]) >= OVERVIEW_FROM:
+        if not storyboard.get("title"):
+            raise StoryboardError('the storyboard needs a "title"')
+        scenes.append(_overview(b, storyboard["title"], storyboard["chapters"], intro or {}))
+        scenes[-1].chapter = "Overview"
+    elif intro:
         scenes.append(_card(b, intro.get("kicker"), storyboard["title"], intro.get("sub"),
                             intro.get("say"), intro.get("speak")))
         scenes[-1].chapter = "Intro"
-    if not storyboard.get("chapters"):
-        raise StoryboardError("the storyboard has no chapters")
     for n, chapter in enumerate(storyboard["chapters"], 1):
         card = _card(b, f"Chapter {n}", chapter["title"], chapter.get("sub"), chapter.get("say"), chapter.get("speak"))
         card.chapter = chapter["title"]

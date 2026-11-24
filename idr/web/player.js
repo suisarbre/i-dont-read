@@ -331,6 +331,33 @@
     }
   };
 
+  builders.steps = (root, scene) => {
+    const h = header(root, scene);
+    const top = below(root, 44);
+    const list = root.appendChild(el('div', 'list'));
+    list.style.top = `${top}px`;
+    const inner = list.appendChild(el('div', 'items'));
+    const parts = scene.items.map((it, i) => {
+      const item = inner.appendChild(el('div', 'item'));
+      item.appendChild(el('div', 'idx', String(i + 1)));
+      const text = item.appendChild(el('div', 'text'));
+      text.appendChild(el('div', 'title', it.title));
+      if (it.detail) text.appendChild(el('div', 'detail', it.detail));
+      if (it.cmd) item.appendChild(el('div', 'cmd', it.cmd));
+      return anim(item, { o: 0, y: 24 });
+    });
+    let k = 1;                                         // scale the whole list down until it clears the captions
+    while (k > 0.55 && top + list.getBoundingClientRect().height > 936) {
+      k -= 0.05;
+      inner.style.zoom = k;
+      inner.style.width = `${100 / k}%`;
+    }
+    void h;
+    for (const op of scene.ops) {
+      if (op.op === 'reveal') { parts[op.item].o.to(op.t, 1, 0.4); parts[op.item].y.to(op.t, 0, 0.45); }
+    }
+  };
+
   window.idr = {
     async load(scene) {
       tracks = []; windows = []; styled = []; last = null;
