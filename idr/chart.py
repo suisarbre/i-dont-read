@@ -22,17 +22,19 @@ _LETTERS = "A-Za-zµμ°Ω"
 # a decimal point, a power of ten, k or M for thousands and millions, and one unit at most.
 _NUMBER = re.compile(
     r"^(?:[~≈]\s*)?(?P<cur>[" + _CURRENCY + r"])?\s*(?P<sign>[-+−])?\s*(?P<cur2>[" + _CURRENCY + r"])?\s*"
-    r"(?P<whole>[1-9]\d{0,2}(?:,\d{3})+|[1-9]\d{0,2}(?:[" + _GAPS + r"]\d{3})+|\d+)?(?P<frac>\.\d+)?"
-    r"(?:[eE](?P<exp>[-+]?\d{1,4}))?(?P<mag>[kKM](?![" + _LETTERS + r"]))?[ " + _GAPS + r"]*(?P<unit>\S+)?$")
+    r"(?P<whole>[1-9][0-9]{0,2}(?:,[0-9]{3})+|[1-9][0-9]{0,2}(?:[" + _GAPS + r"][0-9]{3})+|[0-9]+)?(?P<frac>\.[0-9]+)?"
+    r"(?:[eE](?P<exp>[-+]?[0-9]{1,4}))?(?P<mag>[kKM](?![" + _LETTERS + r"]))?[ " + _GAPS + r"]*(?P<unit>\S+)?$")
+_SCALE = {"k": 1e3, "K": 1e3, "M": 1e6}
+_WIDE_DIGITS = str.maketrans("０１２３４５６７８９．，", "0123456789.,")
 # What may follow a number as its unit: a sign for a share or a ratio, a currency, or a word of letters, which may
 # be a rate (req/s) or squared. No digits: "1m30s", "0x10" and "1e99999" are not a number and a unit.
 _UNIT = re.compile(r"[%‰×xX" + _CURRENCY + r"]|[" + _LETTERS + r"]{1,10}(?:/[" + _LETTERS + r"]{1,8})?[²³]?")
-_DECIMAL_COMMA = re.compile(r"^[-+−]?\s*(?:\d+|\d{1,3}(?:[. ]\d{3})+),\d+(?:\s*\S{1,6})?$")
+_DECIMAL_COMMA = re.compile(r"^[-+−]?\s*(?:[0-9]+|[0-9]{1,3}(?:[. ][0-9]{3})+),[0-9]+(?:\s*\S{1,6})?$")
 _EMPTY = {"", "-", "--", "–", "—", "n/a", "N/A", "NA", "NaN", "nan", "null", "None"}
 # Spellings of one unit: a column in "s" and one in "sec" measure the same thing.
-_SAME = [("s", "sec", "secs", "second", "seconds"), ("ms", "msec", "msecs", "millisecond", "milliseconds"),
-         ("µs", "μs", "us"), ("min", "mins", "minute", "minutes"), ("h", "hr", "hrs", "hour", "hours"),
-         ("d", "day", "days"), ("KB", "kB"), ("B", "byte", "bytes"), ("%", "percent", "pct"), ("×", "x", "X"),
+_SAME = [("s", "sec", "secs", "second"), ("ms", "msec", "msecs", "millisecond"),
+         ("µs", "μs", "us"), ("min", "mins", "minute"), ("h", "hr", "hrs", "hour"),
+         ("d", "day"), ("KB", "kB"), ("B", "byte"), ("%", "percent", "pct"), ("×", "x", "X"),
          ("$", "USD"), ("€", "EUR"), ("£", "GBP"), ("¥", "JPY"), ("₩", "KRW")]
 _CANON = {spelling: group[0] for group in _SAME for spelling in group}
 # What a header may give in brackets as the unit of its column: "time (ms)", "size [KB]", "rate (req/s)".
@@ -46,14 +48,16 @@ _WRAPPERS = re.compile(r"\\(?:mathbf|textbf|boldsymbol|bm|mathrm|mathit|text|tex
 
 
 def same(unit: str) -> str:
-    """One spelling for a unit, to compare two columns by."""
+    """One spelling for a unit, to compare two columns by: "sec" is "s", and "items" is "item"."""
+    if len(unit) >= 5 and unit.isalpha() and unit.endswith("s"):
+        unit = unit[:-1]
     return _CANON.get(unit, unit)
 
 
 def _plain(cell: str) -> str:
     """A cell as its number is written, without what a paper puts round it: $...$, \\textbf{...}, {,} and \\, between
     groups of digits, \\%. What these stand for is the same number; what is left afterwards is read strictly."""
-    text = cell.strip()
+    text = cell.strip().translate(_WIDE_DIGITS)
     if text.count("$") >= 2 and text.count("$") % 2 == 0 and "\\$" not in text:
         text = text.replace("$", "")                    # $-0.8$, $-$0.8 and $93.1$\% are math, not money
     for _ in range(3):
@@ -66,28 +70,51 @@ def _plain(cell: str) -> str:
 
 
 def reading(cell: str) -> tuple[float, str] | None:
-    """The number a cell holds and its unit ("12.5 ms" is 12.5 and ms; "$1,200" is 1200 and $; "1.2M" is 1200000),
-    or None for an empty cell. A cell that is anything else raises ValueError: a chart draws a cell only when the
-    whole of it is one number, because a length drawn from the first digits of "1:45", "1,25" or "1m30s" would be
-    a different number."""
+    """The number a cell holds and its unit ("12.5 ms" is 12.5 and ms; "$1,200" is 1200 and $), or None for an
+    empty cell. A cell that is anything else raises ValueError: a chart draws a cell only when the whole of it is
+    one number, because a length drawn from the first digits of "1:45", "1,25" or "1m30s" would be another number.
+
+    A k, K or M glued to the number ("300K", "25.6M") is returned as its unit and the number is left as written:
+    alone, the letter may be a thousand or kelvin, a million or whatever the header's "(M)" stands for. scaled()
+    says what the cell is worth when the letter is a multiplier, which only a whole column can decide."""
     text = _plain(cell)
     if text in _EMPTY:
         return None
     m = _NUMBER.match(text)
     unit = (m["unit"] or "") if m else ""
-    if not m or (m["whole"] is None and m["frac"] is None) or (m["cur"] and m["cur2"]) or (unit and not _UNIT.fullmatch(unit)):
+    if (not m or (m["whole"] is None and m["frac"] is None) or (m["cur"] and m["cur2"]) or (unit and not _UNIT.fullmatch(unit))
+            or re.fullmatch(r"[-+−]?0[xXbBoO][0-9A-Fa-f]+", text)):
         if _DECIMAL_COMMA.match(text):
             raise ValueError(f"{cell!r} looks like a number written with a decimal comma, and a chart reads a decimal "
                              "point (1.25), with commas only between groups of three digits (1,250)")
         raise ValueError(f"{cell!r} is not a plain number (digits, with one unit such as ms or % at most)")
     value = float(f"{re.sub('[^0-9]', '', m['whole'] or '0')}{m['frac'] or ''}e{m['exp'] or '0'}")
-    value *= {"k": 1e3, "K": 1e3, "M": 1e6}.get(m["mag"], 1.0)
+    currency, mag = m["cur"] or m["cur2"] or "", m["mag"] or ""
+    if currency and unit and same(unit) != same(currency):
+        raise ValueError(f"{cell!r} has two units ({currency} and {unit})")
+    if mag and (currency or unit):                      # "$1.2M", "1.2M req/s": with a unit beside it, the letter multiplies
+        value, mag = value * _SCALE[mag], ""
     if not math.isfinite(value):
         raise ValueError(f"{cell!r} is too large to draw")
-    currency = m["cur"] or m["cur2"] or ""
-    if currency and unit:
-        raise ValueError(f"{cell!r} has two units ({currency} and {unit})")
-    return (-value if m["sign"] in ("-", "−") else value), same(currency or unit)
+    return (-value if m["sign"] in ("-", "−") else value), mag or same(currency or unit)
+
+
+def read_column(cells: list[str]) -> tuple[list[float | None], set[str], bool]:
+    """The numbers of a column, the units its cells carry, and whether k and M in it were taken as multipliers.
+    They are when the column mixes them ("500", "1k", "1.2M"): nothing else makes such a column one measure.
+    When every cell ends in the same letter it stays the column's unit and the numbers stay as written."""
+    got = [reading(cell) for cell in cells]
+    units = {g[1] for g in got if g and (g[1] or g[0] != 0)}        # a bare 0 is zero of whatever the column measures
+    multiplied = len(units) > 1 and units <= {"", *_SCALE}
+    if multiplied:
+        got = [g and (g[0] * _SCALE.get(g[1], 1.0), "") for g in got]
+        units = set()
+    return [g[0] if g else None for g in got], units, multiplied
+
+
+def as_shown(cell: str) -> str:
+    """A cell as the chart writes it: as the file does, without the markup a paper puts round a number."""
+    return _plain(cell) if any(mark in cell for mark in "$\\{") else cell.strip()
 
 
 def header_unit(name: str) -> str:
@@ -101,28 +128,30 @@ def header_unit(name: str) -> str:
 
 def placed(labels: list[str]) -> tuple[list[float] | None, str, str]:
     """Where the rows of a line chart go along x when their x cells are numbers: (positions, unit, "") or
-    (None, "", why not). Only plain numbers in one unit, in rising order, are positions. What is written as a
-    code is a name even when it is all digits: 0930 is a time and 202409 a month, and placing them as the
-    numbers 930 and 202409 would draw gaps the calendar does not have."""
+    (None, "", why not). Only plain numbers in one unit, in rising order, are positions, and digits written the
+    way dates and clock times are stay names: placing 0930 and 202409 as numbers would draw gaps the calendar
+    does not have. What is left can still be read both ways (1300 may be a size or one o'clock), so the chart
+    says which it took, and "spacing" settles it."""
     try:
-        got = [reading(text) for text in labels]
+        values, units, _ = read_column(labels)
     except ValueError as problem:
         return None, "", str(problem)
-    if any(g is None for g in got):
+    if any(v is None for v in values):
         return None, "", "one of them is empty"
-    if len({g[1] for g in got}) > 1:
-        return None, "", f"they are in different units ({', '.join(sorted({g[1] or 'none' for g in got}))})"
-    if not all(a[0] < z[0] for a, z in zip(got, got[1:])):
+    if len(units) > 1:
+        return None, "", f"they are in different units ({', '.join(sorted(u or 'none' for u in units))})"
+    if not all(a < z for a, z in zip(values, values[1:])):
         return None, "", "they are not in rising order"
-    digits = [re.sub(r"[^\d.]", "", _plain(text)) for text in labels]
-    if any(re.fullmatch(r"0\d+", d) for d in digits):
+    digits = [re.sub(r"[^0-9.]", "", _plain(text)) for text in labels]
+    if any(re.fullmatch(r"0[0-9]+", d) for d in digits):
         return None, "", "they are written with leading zeros, as codes and clock times are (0930)"
-    if all(re.fullmatch(r"(?:19|20)\d\d(?:0[1-9]|1[0-2])(?:[0-3]\d)?", d) for d in digits):
-        return None, "", "they are written the way dates are (202409), not as measurements"
+    if all(re.fullmatch(r"(?:19|20)[0-9]{2}(?:0[1-9]|[1-4][0-9]|5[0-3])(?:[0-3][0-9])?", d) for d in digits) \
+            or all(re.fullmatch(r"(?:19|20)[0-9]{2}\.(?:0[1-9]|1[0-2])", d) for d in digits):
+        return None, "", "they are written the way dates are (202409, 2024.09)"
     parts = [d.partition(".")[2] for d in digits]
     if any(len(part) >= 2 and part.endswith("0") for part in parts) and len({len(part) for part in parts}) > 1:
-        return None, "", "they are written the way versions are (2.10 beside 2.9), not as measurements"
-    return [g[0] for g in got], got[0][1], ""
+        return None, "", "some are written with a zero at the end, the way versions are (2.10 beside 2.9)"
+    return values, next(iter(units), ""), ""
 
 
 def _marks(low: float, high: float, about: int, whole: bool = False) -> list[list]:
@@ -133,7 +162,12 @@ def _marks(low: float, high: float, about: int, whole: bool = False) -> list[lis
     step = min((b - a for a, b in zip(marks, marks[1:])), default=abs(high) or 1.0)
     big = max(abs(v) for v in marks) or step
     digits = max(4, int(math.floor(math.log10(big))) - int(math.floor(math.log10(step) + 1e-9)) + 1)
-    return [[v, plot.minus(plot.number(v, digits))] for v in marks]
+    texts = [plot.minus(plot.number(v, digits)) for v in marks]
+    if any("10" in t and "×" in t or t.lstrip("−").startswith("10") and len(t.lstrip("−")) > 2 and not t.lstrip("−").isdigit() for t in texts):
+        power = int(math.floor(math.log10(big)))          # one mark needs a power of ten, so all are written with that power
+        raised = str(power).translate(str.maketrans("-0123456789", "⁻⁰¹²³⁴⁵⁶⁷⁸⁹"))
+        texts = ["0" if v == 0 else plot.minus(f"{v / 10 ** power:.6g}") + f"×10{raised}" for v in marks]
+    return [[v, text] for v, text in zip(marks, texts)]
 
 
 def _titled(name: str, unit: str) -> str:
@@ -165,7 +199,7 @@ def _chart(b, spec: dict, kicker: str) -> plan.Scene:
     def table(read, *args):
         try:
             return read(*args)
-        except ValueError as problem:                     # the advice for a table scene (write it out) does not hold here
+        except (ValueError, OSError) as problem:          # the advice for a table scene (write it out) does not hold here
             text = str(problem).replace("table scene", "chart")
             for advice in (". If the table is not written that way", "; write the table out with", "; write it out with"):
                 if advice in text:
@@ -221,9 +255,11 @@ def _chart(b, spec: dict, kicker: str) -> plan.Scene:
     for n in skip:
         if n not in numbers:
             raise StoryboardError(f'{where}: "skip" names row {n}, which is not one of the rows read ({numbers[0]} to {numbers[-1]})')
+    read = rows                                           # every row read, whatever is left out below
     if skip:                                              # said on screen: a chart may not drop a row in silence
         rows, numbers = ([x for x, n in zip(seq, numbers) if n not in skip] for seq in (rows, numbers))
-        sub += f"{'' if 'rows' in sub or 'row ' in sub else '  ·  all rows'} except {', '.join(str(n) for n in sorted(set(skip)))}"
+        ranged = name.lower().endswith((".csv", ".tsv")) or "rows" in spec
+        sub += f"{'' if ranged else '  ·  all rows'} except {', '.join(str(n) for n in sorted(set(skip)))}"
         if not rows:
             raise StoryboardError(f'{where}: "skip" leaves no rows to draw')
     sub += at_ref
@@ -266,7 +302,8 @@ def _chart(b, spec: dict, kicker: str) -> plan.Scene:
     if any(numeric(header[yi]) for yi in ys):               # a column of numbers named by a number: a first row of data
         b.warn(where, f"the first line read from {name} is {', '.join(header)}, and the chart takes it for the column "
                f"names; {next(header[yi] for yi in ys if numeric(header[yi]))!r} looks like a value. If the file has no "
-               "header row, its first row is missing from this chart")
+               "header row, its first row is missing from this chart, and a chart cannot read such a file: show its "
+               'rows in a table scene with "header" and "rows" written out')
     limit = MAX_BARS if kind == "bar" else MAX_POINTS
     if len(rows) > limit:
         raise StoryboardError(f"{where}: {len(rows)} rows are too many for a {kind} chart ({limit} at most); "
@@ -277,7 +314,20 @@ def _chart(b, spec: dict, kicker: str) -> plan.Scene:
 
     series, units = [], []
     for yi in ys:
-        values, unit = [], set()
+        # A column that writes even one decimal with a comma is in that notation throughout, and then its "1,250"
+        # is one and a quarter. Leaving the tell-tale rows out would not make the rest safe to read.
+        def with_comma(cell: str) -> bool:
+            try:
+                reading(cell)
+            except ValueError as problem:
+                return "decimal comma" in str(problem)
+            return False
+
+        comma = next((row[yi] for row in read if with_comma(row[yi])), None)
+        if comma is not None:
+            raise StoryboardError(f"{where}: column {header[yi]!r} writes decimals with a comma ({comma!r}), so a cell such "
+                                  "as 1,250 in it means one and a quarter, and a chart would draw 1250. Show the column in "
+                                  "a table scene")
         for n, row in zip(numbers, rows):
             try:
                 got = reading(row[yi])
@@ -287,30 +337,34 @@ def _chart(b, spec: dict, kicker: str) -> plan.Scene:
             if got is None and kind == "bar":
                 raise StoryboardError(f"{where}: row {n} of column {header[yi]!r} is empty, and a bar needs a number: "
                                       f"{leave.format(n)}")
-            values.append(got[0] if got else None)
-            if got and (got[1] or got[0] != 0):         # a bare 0 is zero of whatever the column measures
-                unit.add(got[1])
+        values, unit, multiplied = read_column([row[yi] for row in rows])
         if len(unit) > 1:
             raise StoryboardError(f"{where}: column {header[yi]!r} mixes units ({', '.join(sorted(u or 'none' for u in unit))}), "
                                   'and one axis cannot measure both; leave rows out with "skip", or show the column in a table scene')
         if not any(v is not None for v in values):
             raise StoryboardError(f"{where}: column {header[yi]!r} has no numbers in these rows")
+        if multiplied:
+            b.note(where, f"column {header[yi]!r} mixes plain numbers with k and M, so they were read as thousands and "
+                   "millions; if the letters are units there, show the column in a table scene")
         in_cells, in_header = next(iter(unit), ""), header_unit(header[yi])
-        if in_cells and in_header and in_cells != in_header and in_header not in _AMBIGUOUS:
+        if in_cells and in_header and in_cells != in_header and in_header not in _AMBIGUOUS and in_cells not in _SCALE:
             b.warn(where, f"the header {header[yi]!r} seems to say {in_header}, and the cells under it are in {in_cells}; "
                    "if the bracket is the column's unit, the file contradicts itself and the chart shows both as written")
-        series.append({"name": header[yi], "values": values, "texts": [row[yi] for row in rows]})
+        series.append({"name": header[yi], "values": values, "texts": [as_shown(row[yi]) for row in rows]})
         units.append((in_cells, in_header))
-    if len({cells for cells, _ in units}) > 1:
+    # What the cells say is a fact; what a header's bracket says is a hint. Two columns disagree for certain when
+    # their cells carry different units, or when one's cells carry a unit and the other gives none anywhere.
+    measure = [cells or hint for cells, hint in units]
+    stated = {cells for cells, _ in units if cells}
+    if len(stated) > 1 or (stated and any(not m for m in measure)):
         raise StoryboardError(f"{where}: the columns are in different units ("
-                              + ", ".join(f"{header[yi]!r} in {u}" if u else f"{header[yi]!r} with none" for yi, (u, _) in zip(ys, units))
+                              + ", ".join(f"{header[yi]!r} in {m}" if m else f"{header[yi]!r} with none" for yi, m in zip(ys, measure))
                               + "), and one axis cannot measure both; draw them in two chart scenes")
-    hinted = {hint for cells, hint in units if hint and not cells}
-    if len(hinted) > 1 and not hinted <= _AMBIGUOUS:
-        b.warn(where, "the headers " + " and ".join(repr(header[yi]) for yi in ys) + f" seem to give different units "
-               f"({', '.join(sorted(hinted))}). If they are units, one axis cannot measure both: draw two chart scenes. "
-               "If the brackets mean something else, this is fine as it is")
-    shared = units[0][0] or (next(iter(hinted)) if len(hinted) == 1 and all(hint for _, hint in units) else "")
+    if len(set(measure)) > 1:                           # they differ only by what the headers hint at
+        said = " and ".join(repr(header[yi]) for yi in ys) + f" seem to give different units ({', '.join(sorted(m for m in set(measure) if m))})"
+        b.warn(where, f"the headers {said}. If they are units, one axis cannot measure both and the longer bar is not the "
+               "larger amount: draw two chart scenes. If the brackets mean something else, this is right as it is")
+    shared = measure[0] if len(set(measure)) == 1 else ""
     every = [v for s in series for v in s["values"] if v is not None]
     low, high = min(every), max(every)
     if kind == "bar" or 0 <= low <= 0.6 * high or high <= 0 <= low:
@@ -345,15 +399,24 @@ def _chart(b, spec: dict, kicker: str) -> plan.Scene:
                               f"evenly along x or placed by the number in {header[xi]!r}")
     if kind == "line":
         positions, x_unit, why = placed(labels)
+        try:                                            # could they be placed by number at all?
+            could, could_units, _ = read_column(labels)
+            could = could if all(v is not None for v in could) and len(could_units) <= 1 and all(a < z for a, z in zip(could, could[1:])) else None
+        except ValueError:
+            could = None
         if spacing == "numbers" and not positions:      # asked for outright: a code read as a number is then the author's call
-            try:
-                got = [reading(text) for text in labels]
-                if all(g is not None for g in got) and len({g[1] for g in got}) == 1 and all(a[0] < z[0] for a, z in zip(got, got[1:])):
-                    positions, x_unit = [g[0] for g in got], got[0][1]
-            except ValueError:
-                pass
-            if not positions:
+            if not could:
                 raise StoryboardError(f'{where}: "spacing": "numbers" places the rows by {header[xi]!r}, but {why}')
+            positions, x_unit = could, next(iter(could_units), "")
+        if could and not spacing:                       # both readings are possible, so say which one was taken
+            first_, last_ = labels[0], labels[-1]
+            if positions:
+                b.note(where, f"the rows are placed along x by the number in {header[xi]!r} ({first_} to {last_}), so the "
+                       'gaps between them are as wide as the numbers are apart; if these are names, codes or times, add '
+                       '"spacing": "even"')
+            else:
+                b.note(where, f"the cells of {header[xi]!r} ({first_} to {last_}) were taken as names, because {why}, and "
+                       'the rows are spread evenly; if they are amounts, add "spacing": "numbers"')
         if positions and spacing != "even":
             whole = all(abs(v - round(v)) < 1e-9 for v in positions)
             try:

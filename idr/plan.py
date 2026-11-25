@@ -197,6 +197,10 @@ class _Builder:
     def warn(self, where: str, message: str) -> None:
         self.warnings.append(f"{where}: {message}")
 
+    def note(self, where: str, message: str) -> None:
+        """Something the author should know and need not change: how an ambiguous thing was read, and how to say otherwise."""
+        self.warnings.append(f"note: {where}: {message}")
+
     def scene(self, kind: str, kicker, spec: dict, sub_is_source: bool = False, **extra) -> Scene:
         heading = spec.get("heading")
         if heading and len(heading) > 60:

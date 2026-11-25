@@ -76,8 +76,8 @@ def _report(scenes: list, warnings: list[str], guessed: int = 0) -> float:
     if guessed:
         print(f"       {guessed} sentence(s) not spoken yet, so their lengths are estimates (usually within 5% overall); "
               "\"check --spoken\" says them now and gives the real length")
-    for w in warnings:
-        print(f"warning: {w}")
+    for w in warnings:                                  # a note says how something was read; it is not a fault to fix
+        print(w if w.startswith("note: ") else f"warning: {w}")
     return total
 
 
@@ -128,7 +128,7 @@ def cmd_check(args) -> None:
     misfits = [text for text in misfits if not text.startswith("~")]
     if misfits:
         raise plan.StoryboardError("\n".join(misfits))
-    count = len(warnings) + len(sits_badly)
+    count = len([w for w in warnings if not w.startswith("note: ")]) + len(sits_badly)
     print("ok" if not count else f"ok, with {count} warning(s)")
 
 

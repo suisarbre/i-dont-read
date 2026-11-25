@@ -23,6 +23,8 @@ def _words(value, what: str, where: str, needed: bool = True) -> str | None:
 def _beats(spec: dict, what: str, where: str) -> None:
     if not isinstance(spec.get("beats"), list) or not spec["beats"]:
         raise StoryboardError(f"{where}: {what} needs at least one beat: a sentence about what it shows")
+    if spec.get("sub") is not None and not isinstance(spec["sub"], str):
+        raise StoryboardError(f'{where}: "sub" is a line of text under the heading, not {spec["sub"]!r}')
 
 
 def _flag(item: dict, key: str, what: str, where: str) -> bool:
@@ -432,7 +434,7 @@ def _array(b, spec: dict, kicker: str) -> plan.Scene:
     scene.sfx.append((0.0, "whoosh"))
     ops = scene.payload["ops"]
     clock = plan._Clock(b, scene, where)
-    marked, pointed, late = [], {}, False
+    marked, pointed, late, brief, set_at = [], {}, False, False, 0.0
     free = 0.0                 # when the last operation has landed. The player replays what happens in order of
     for beat in spec.get("beats", []):     # time, so nothing may be timed before an operation worked out ahead of it.
         acts = clock.beat(beat)
@@ -456,6 +458,11 @@ def _array(b, spec: dict, kicker: str) -> plan.Scene:
                         b.warn(where, f"in the sentence {str(beat.get('say'))[:40]!r}..., an operation happens {at - t:.1f} s "
                                "after the word it belongs to, because the ones before it are still moving (each takes "
                                "0.7 s); give the operations more words between them, or a beat each")
+                    if (marked or pointed) and at < set_at + 0.6 and not brief:
+                        brief = True
+                        b.warn(where, f"in the sentence {str(beat.get('say'))[:40]!r}..., a mark or pointer is on screen for "
+                               f"{max(at - set_at, 0):.1f} s before the next operation clears it, too short to be seen; set it "
+                               "in an earlier beat, or after the operation")
                     ops.append({"op": "change", "t": at, **apply(op)})
                     scene.sfx.append((at, "pop" if "enter" in ops[-1] else "tick"))
                     free, did = at + 0.7, True
@@ -469,6 +476,7 @@ def _array(b, spec: dict, kicker: str) -> plan.Scene:
                 target = [] if (src is beat or did) else marked
             if target != marked:
                 ops.append({"op": "mark", "t": after, "cells": target})
+                set_at = after if target else set_at
                 marked = target
             if "pointers" in act:
                 given = {} if act["pointers"] is None else act["pointers"]
@@ -483,6 +491,7 @@ def _array(b, spec: dict, kicker: str) -> plan.Scene:
                 names = {} if (src is beat or did) else pointed
             if names != pointed:
                 ops.append({"op": "pointers", "t": after, "at": names})
+                set_at = after if names else set_at
                 pointed = names
             if did and (target or names):                 # placed after the operations, so held long enough to be read
                 clock.t = max(clock.t, after + 1.2 + plan.GAP)

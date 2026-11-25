@@ -145,6 +145,8 @@ def _read(root: Path, file: str, ref: str | None, scene: str, encoding: str | No
         if text is None:
             raise FileNotFoundError(f"{scene} scene: {file} did not exist at {ref!r}")
         return text
+    if path.is_dir():
+        raise FileNotFoundError(f"{scene} scene: {file} is a folder, not a file")
     if not path.is_file():
         raise FileNotFoundError(f"{scene} scene points at a file that does not exist: {file}")
     return _decode(path.read_bytes(), file, encoding)
