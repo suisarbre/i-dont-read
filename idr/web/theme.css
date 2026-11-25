@@ -144,7 +144,8 @@ body { font-family: "IDR Sans", sans-serif; -webkit-font-smoothing: antialiased;
 .scene.sequence .mlabel { position: absolute; font-size: 25px; line-height: 1.12; text-align: center; background: var(--bg); padding: 0 8px;
   border-radius: 8px; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
 html[data-format="tall"] .scene.sequence .mlabel { font-size: 23px; }
-.scene.sequence .mlabel.lit { color: var(--accent); font-weight: 600; }
+.scene.sequence .mlabel.math { display: block; overflow: visible; }
+.scene.sequence .mlabel.lit { color: var(--accent); }
 
 .scene.chart .c1 { --c: var(--accent); }
 .scene.chart .c2 { --c: var(--curve-2); }

@@ -1874,7 +1874,7 @@ def build(storyboard: dict, root: Path, theme: str, narrator, captions: bool = T
             except (ValueError, FileNotFoundError) as problem:      # report every scene's problem in one run
                 named = isinstance(problem, (StoryboardError, FileNotFoundError))
                 problems.append(str(problem) if named else f"{spec.get('heading') or spec['type']}: {problem}")
-            except (TypeError, AttributeError, OverflowError, ZeroDivisionError) as problem:
+            except (TypeError, AttributeError, OverflowError, ZeroDivisionError, IndexError) as problem:
                 # A field holds the wrong kind of value (a number where a list belongs). Say which scene, not a traceback.
                 listed = ("guides/math.md" if spec["type"] in ("math", "plot") else "guides/diagrams.md"
                           if spec["type"] in ("diagram", "array", "sequence", "chart") else "SKILL.md section 4")

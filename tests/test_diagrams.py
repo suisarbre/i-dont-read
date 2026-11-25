@@ -232,7 +232,8 @@ class WholeCells(unittest.TestCase):
     another number."""
 
     def test_what_is_not_one_plain_number_is_refused(self):
-        for cell in ["1,25", "0,5", "1.234,56", "0:45", "1'500", "1\\,500", "2^10", "12*", "1 234", "5 ms avg", "$5 USD", "12,34"]:
+        for cell in ["1,25", "0,5", "0,750", "1.234,56", "0:45", "1'500", "2^10", "12*", "*12", "1 234", "5 ms avg", "$5 USD", "12,34",
+                     "1m30s", "0x10", "1h30", "0b101", "12±3", "$71.2 \\pm 0.4$"]:
             with self.assertRaises(ValueError, msg=cell):
                 chart.reading(cell)
         with self.assertRaises(ValueError) as caught:
@@ -248,16 +249,51 @@ class WholeCells(unittest.TestCase):
         refused(self, {"type": "chart", "heading": "h", "file": "d.csv", "rows": [1, 2], "x": "n", "y": "v", "beats": [{"say": "one"}]},
                 "too large, too small or too close together", {"d.csv": "n,v\na,1e-320\nb,2e-320\n"})
 
-    def test_units_in_headers_count(self):
+    def test_a_unit_in_a_header_is_a_hint_and_not_a_fact(self):
         def scene(**fields):
             return {"type": "chart", "heading": "h", "file": "d.csv", "rows": [1, 2], "x": "n", "beats": [{"say": "one"}], **fields}
-        data = {"d.csv": "n,time (ms),size (KB),p99 (ms),wait (ms),score (higher is better)\na,5,900,9,5 s,1\nb,7,300,12,6 s,2\n"}
-        refused(self, scene(y=["time (ms)", "size (KB)"]), "'time (ms)' in ms, 'size (KB)' in KB", data)
-        refused(self, scene(y="wait (ms)"), "says ms, and the cells under it are in s", data)
-        both, _ = build(scene(y=["time (ms)", "p99 (ms)"]), data)
-        self.assertEqual(both.payload["axis"]["title"], "ms")
+        data = {"d.csv": "n,time (ms),size (KB),p99 (ms),wait (ms),latency (min),latency (max),train (s),test (sec)\n"
+                         "a,5,900,9,5 s,2 ms,9 ms,1,2\nb,7,300,12,6 s,3 ms,8 ms,3,4\n"}
+        _, warnings = build(scene(y=["time (ms)", "size (KB)"]), data)             # may be two units: said, not refused
+        self.assertTrue(any("seem to give different units (KB, ms)" in w for w in warnings), warnings)
+        _, warnings = build(scene(y="wait (ms)"), data)
+        self.assertTrue(any("seems to say ms, and the cells under it are in s" in w for w in warnings), warnings)
+        for pair in (["time (ms)", "p99 (ms)"], ["latency (min)", "latency (max)"], ["train (s)", "test (sec)"]):
+            built, warnings = build(scene(y=pair), data)
+            self.assertEqual(warnings, [], pair)
+        self.assertEqual(build(scene(y=["time (ms)", "p99 (ms)"]), data)[0].payload["axis"]["title"], "ms")
         self.assertEqual(chart.header_unit("score (higher is better)"), "")
         self.assertEqual(chart.header_unit("rate [req/s]"), "req/s")
+        refused(self, scene(y=["time (ms)", "wait (ms)"]), "the columns are in different units", data)   # what the cells say is a fact
+
+    def test_what_a_paper_puts_round_a_number_is_read_through(self):
+        for cell, got in [("$91.2\\%$", (91.2, "%")), ("$\\mathbf{93.1}$", (93.1, "")), ("{\\bf 93.1}", (93.1, "")),
+                          ("$12{,}345$", (12345.0, "")), ("12\\,345", (12345.0, "")), ("$-$0.8", (-0.8, "")), ("$93.1$\\%", (93.1, "%")),
+                          ("1.0×", (1.0, "×")), ("1.0x", (1.0, "×")), ("$1.2M", (1200000.0, "$")), ("5K", (5000.0, "")), ("1k", (1000.0, "")),
+                          ("12 MB", (12.0, "MB")), ("5 sec", (5.0, "s")), ("NaN", None)]:
+            self.assertEqual(chart.reading(cell), got, cell)
+        self.assertEqual(source._tex_cell("\\textbf{$93.1$}", "w"), "93.1")
+        self.assertEqual(source._tex_cell("12\\,345", "w"), "12\u2009345")
+
+    def test_a_bare_zero_has_no_unit_to_mix(self):
+        scene = {"type": "chart", "heading": "h", "file": "d.csv", "rows": [1, 3], "x": "n", "y": "share", "beats": [{"say": "one"}]}
+        built, _ = build(scene, {"d.csv": "n,share\na,0\nb,12%\nc,88%\n"})
+        self.assertEqual(built.payload["series"][0]["values"], [0.0, 12.0, 88.0])
+        refused(self, scene, "mixes units", {"d.csv": "n,share\na,5\nb,12%\nc,88%\n"})
+
+    def test_rows_can_be_chosen_and_left_out_and_keep_their_numbers(self):
+        table = "| n | v |\n|---|---|\n" + "".join(f"| r{i} | {'—' if i == 1 else i * 10 if i != 4 else '9.8*'} |\n" for i in range(1, 15))
+        def scene(**fields):
+            return {"type": "chart", "heading": "h", "file": "r.md", "lines": [1, 16], "x": "n", "y": "v", "beats": [{"say": "one"}], **fields}
+        refused(self, scene(), 'give "rows": [first, last]', {"r.md": table})
+        refused(self, scene(rows=[1, 6]), 'row 1 of column \'v\' is empty, and a bar needs a number: leave it out with "skip": [1]', {"r.md": table})
+        refused(self, scene(rows=[2, 6]), 'leave it out with "skip": [4]', {"r.md": table})
+        built, _ = build(scene(rows=[2, 6], skip=[4], beats=[{"say": "It is {value}.", "highlight": {"row": 5}}]), {"r.md": table})
+        self.assertEqual((built.payload["labels"], built.payload["series"][0]["values"]), (["r2", "r3", "r5", "r6"], [20.0, 30.0, 50.0, 60.0]))
+        self.assertIn("rows 2–6 except 4", built.payload["sub"])
+        self.assertEqual(built.payload["captions"][0]["text"], "It is 50.")
+        refused(self, scene(rows=[2, 6], skip=[4], beats=[{"say": "one", "highlight": {"row": 4}}]), "the chart draws rows 2, 3, 5, 6", {"r.md": table})
+        refused(self, scene(rows=[2, 6], skip=[9]), "which is not one of the rows read", {"r.md": table})
 
     def test_a_footnote_mark_stays_on_its_cell(self):
         self.assertEqual([source._cell(c) for c in [" 12* ", " *bold* ", "**x**", " a*b ", " 5† "]], ["12*", "bold", "x", "a*b", "5†"])
@@ -276,7 +312,8 @@ class AlongX(unittest.TestCase):
 
     def test_dates_times_units_and_versions_are_names(self):
         for column in (["2019-12-31", "2020-01-01", "2024-06-30"], ["9:00", "10:45", "13:15"], ["1 KB", "2 MB", "4 GB"],
-                       ["1.8", "1.9", "2.0", "2.10"], ["3", "1", "2"]):
+                       ["1.8", "1.9", "2.0", "2.10"], ["3", "1", "2"], ["202409", "202410", "202501"], ["0900", "0930", "1000"],
+                       ["20240930", "20241001", "20241002"]):
             got = self.x(column)
             self.assertEqual((got["numeric"], got["at"], [t for _, t in got["ticks"]]), (False, list(range(len(column))), column))
 
@@ -284,7 +321,10 @@ class AlongX(unittest.TestCase):
         years = self.x(["2019", "2020", "2021", "2022"])
         self.assertEqual((years["numeric"], [t for _, t in years["ticks"]]), (True, ["2019", "2020", "2021", "2022"]))
         sizes = self.x(["4 ms", "8 ms", "16 ms"])
-        self.assertEqual(sizes["at"], [4.0, 8.0, 16.0])
+        self.assertEqual((sizes["at"], sizes["title"]), ([4.0, 8.0, 16.0], "x (ms)"))
+        self.assertEqual(self.x(["1k", "2k", "4k", "8k"])["at"], [1000.0, 2000.0, 4000.0, 8000.0])     # and the axis says 2000, not 2
+        self.assertEqual(self.x(["0.1", "0.25", "0.5", "1.0"])["at"], [0.1, 0.25, 0.5, 1.0])           # decimals, not versions
+        self.assertEqual(self.x(["0900", "0930", "1000"], spacing="numbers")["at"], [900.0, 930.0, 1000.0])   # when asked outright
         self.assertEqual(self.x(["2019", "2020", "2021"], spacing="even")["numeric"], False)
         with self.assertRaises(plan.StoryboardError) as caught:
             self.x(["1 KB", "2 MB", "4 GB"], spacing="numbers")
@@ -344,6 +384,10 @@ class WhatIsFilmed(unittest.TestCase):
         refused(self, self.diagram(nodes=[{"label": ["A"]}, {"label": "B"}]), "a node's label is a piece of text")
         refused(self, self.diagram(nodes=[{"label": "   "}, {"label": "B"}]), "a node's label is a piece of text")
         refused(self, self.diagram(edges=[{"from": "A", "to": "B", "label": {"x": 1}}]), "the label of the edge")
+        for wrong in ({}, 0, False, ""):
+            refused(self, self.diagram(edges=wrong), '"nodes" and "edges" are lists')
+        for wrong in (False, 0, [], "up"):
+            refused(self, self.diagram(direction=wrong), '"direction" is "right" or "down"')
         refused(self, self.sequence(actors="AB"), '"actors" is a list')
         refused(self, self.sequence(actors=["A", None]), "a party's name is a piece of text")
         refused(self, self.sequence(messages=[{"from": "A", "to": "B", "label": [None]}]), "the label of message 1")
@@ -451,6 +495,26 @@ class OnlyWhatIsThere(unittest.TestCase):
         refused(self, {"type": "array", "heading": "h", "items": ["a"], "index": "false", "beats": [{"say": "one"}]}, '"index" is true or false')
         refused(self, {"type": "array", "heading": "h", "items": ["a"], "beats": [{"say": "one", "pointers": 0}]}, '"pointers" names up to 3 places')
 
+    def test_an_empty_row_has_no_front(self):
+        for beat in ({"mark": "front"}, {"pointers": {"i": "back"}}, {"do": {"move": "front", "to": "back"}}, {"do": {"swap": ["front", "back"]}}):
+            refused(self, {"type": "array", "heading": "h", "items": [], "beats": [{"say": "one", "do": {"push": "a"}},
+                                                                                    {"say": "two", "do": {"pop": 0}}, {"say": "three", **beat}]},
+                    "but the row is empty at that point")
+
+    def test_a_full_row_of_slots_can_still_take_one_more_for_a_moment(self):
+        items = [str(i) for i in range(12)]
+        scene, _ = build({"type": "array", "heading": "h", "items": items, "capacity": 12, "beats": [
+            {"say": "Store, then evict.", "do": [{"push": "x"}, {"pop": "front"}]}]})
+        self.assertEqual(scene.payload["most"], 13)
+        refused(self, {"type": "array", "heading": "h", "items": items, "beats": [{"say": "one", "do": {"push": "x"}}]}, "has room for 12")
+
+    def test_a_cue_that_has_to_wait_long_is_pointed_out(self):
+        beat = {"say": "Push one, two, three, four and five.", "cues": [{"at": w, "do": {"push": w}} for w in ("one", "two", "three", "four", "five")]}
+        _, warnings = build({"type": "array", "heading": "h", "items": ["z"], "beats": [beat]})
+        self.assertEqual(len([w for w in warnings if "after the word it belongs to" in w]), 1, warnings)
+        _, warnings = build({"type": "array", "heading": "h", "items": ["z"], "beats": [{"say": "Three in a row.", "do": [{"push": "a"}, {"push": "b"}, {"push": "c"}]}]})
+        self.assertEqual(warnings, [])                                             # a list in one "do" is meant to run in turn
+
     def test_a_chart_takes_only_what_it_uses(self):
         files = {"d.csv": CSV}
         refused(self, self.chart(sub="measured on 4,000 machines"), 'it takes no "sub"', files)
@@ -470,16 +534,18 @@ class OnlyWhatIsThere(unittest.TestCase):
         build(self.chart(expect="4,2565"), {"d.csv": CSV})
         refused(self, self.chart(expect="4,2565"), "neither the header", {"d.csv": CSV.replace("size,hits,rate,note\n", "size,hits,rate,note\n2,1000,5.0%,\n")})
 
-    def test_a_typed_number_the_chart_does_not_draw_is_pointed_out(self):
-        _, warnings = build(self.chart(beats=[{"say": "It takes only 3 milliseconds at size 8.", "highlight": {"x": "8"}}]), {"d.csv": CSV})
-        self.assertEqual(len([w for w in warnings if "says 3, which is not a number this chart draws" in w]), 1, warnings)
-        _, warnings = build(self.chart(beats=[{"say": "At size {x} it is {value}, up from 12.8.", "highlight": {"x": "8"}}]), {"d.csv": CSV})
-        self.assertEqual([w for w in warnings if "not a number this chart draws" in w], [])
+    def test_braces_in_a_sentence_quote_a_cell_or_are_an_error(self):
+        _, warnings = build(self.chart(beats=[{"say": "It takes only 3 milliseconds at size 8, with Python 3.12.", "highlight": {"x": "8"}}]), {"d.csv": CSV})
+        self.assertEqual(warnings, [])                                             # a sentence is the author's; only {…} is checked
+        for odd in ("{Value}", "{values}", "{y}", "{ value }", "{a.b}"):
+            refused(self, self.chart(beats=[{"say": f"It is {odd}.", "highlight": {"x": "8"}}]), "is not something a chart can quote", {"d.csv": CSV})
 
     def test_a_first_row_of_numbers_is_probably_not_a_header(self):
         scene = {"type": "chart", "heading": "h", "file": "d.csv", "rows": [1, 2], "x": 1, "y": 2, "beats": [{"say": "one"}]}
-        _, warnings = build(scene, {"d.csv": "4,0.50\n8,0.62\n16,0.75\n"})
-        self.assertTrue(any("looks like data, not column names" in w for w in warnings), warnings)
+        for first in ("4,0.50", "baseline,1250"):
+            _, warnings = build(scene, {"d.csv": f"{first}\n8,0.62\n16,0.75\n"})
+            self.assertTrue(any("looks like a value" in w for w in warnings), warnings)
+        self.assertEqual(build(scene, {"d.csv": "size,rate\n8,0.62\n16,0.75\n"})[1], [])
 
 
 class LaidOut(unittest.TestCase):
@@ -551,6 +617,41 @@ class LaidOut(unittest.TestCase):
         for i, p in enumerate(boxes):
             for q in boxes[i + 1:]:
                 self.assertFalse(p[0] < q[2] and p[2] > q[0] and p[1] < q[3] and p[3] > q[1], (p, q))
+
+    def test_arrows_that_bend_in_one_gap_do_not_run_as_one(self):
+        orders = {"type": "diagram", "heading": "h", "direction": "down",
+                  "nodes": [{"label": n} for n in ("Orders", "Inventory", "Failed", "Validate", "Billing", "Client")],
+                  "edges": [{"from": "Orders", "to": "Inventory"}] + [{"from": "Inventory", "to": n} for n in ("Failed", "Validate", "Billing", "Client")]
+                           + [{"from": "Client", "to": "Orders", "label": "new order"}],
+                  "beats": [{"say": "one"}]}
+        self.assertEqual(self.problems(orders), [])
+        paths = self.studio.page.evaluate("""() => [...document.querySelectorAll('svg.ink > g.edge > path.line')].map(p => {
+            const out = []; for (let s = 0; s <= p.getTotalLength(); s += 4) { const q = p.getPointAtLength(s); out.push([q.x, q.y]); } return out; })""")
+        for i, p in enumerate(paths):
+            for q in paths[i + 1:]:
+                run = most = 0
+                for x, y in p:
+                    run = run + 1 if any(abs(x - u) < 4 and abs(y - v) < 4 for u, v in q) else 0
+                    most = max(most, run)
+                self.assertLess(most * 4, 56)
+
+    def test_a_sequence_gives_each_label_the_height_it_needs(self):
+        def talk(count, sub=None):
+            scene = {"type": "sequence", "heading": "How one order travels from the browser to the database", "actors": ["Browser", "Gateway", "Auth", "Orders"],
+                     "messages": [{"from": "Gateway", "to": "Auth", "label": "validate the token and its scopes, please"} for _ in range(count)],
+                     "beats": [{"say": "one", "focus": 1}]}
+            return {**scene, "sub": sub} if sub else scene
+        self.assertEqual(self.problems(talk(5)), [])
+        rects = self.studio.page.evaluate("() => [...document.querySelectorAll('.mlabel')].map(e => { const r = e.getBoundingClientRect(); return [r.top, r.bottom]; })")
+        for above, below in zip(rects, rects[1:]):
+            self.assertGreater(below[0], above[1] + 6)                             # and the arrow between them stays clear
+        found = self.problems(talk(9, "every hop, with what is sent and what comes back"))
+        self.assertTrue(any("need more height than the frame has" in text for text in found), found)
+
+    def test_a_formula_in_a_message_is_not_taken_for_a_cut_label(self):
+        scene = {"type": "sequence", "heading": "h", "actors": ["A", "B"], "math": True,
+                 "messages": [{"from": "A", "to": "B", "label": "keep with probability $\\frac{1}{2}$"}], "beats": [{"say": "one"}]}
+        self.assertEqual(self.problems(scene), [])
 
     def test_a_message_that_would_be_cut_is_reported(self):
         def talk(label, a="Client", z="Worker"):

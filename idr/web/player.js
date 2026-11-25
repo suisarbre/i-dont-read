@@ -31,12 +31,14 @@
         return tr;
       },
       seek(t) {
+        // A key that starts while the one before it is still under way takes over from where that one has got
+        // to: something told to fade out while it is fading in turns round, and does not first jump to full.
         let v = initial;
-        for (const k of keys) {
+        for (let i = 0; i < keys.length; i++) {
+          const k = keys[i];
           if (t < k.t) break;
-          if (k.dur <= 0 || t >= k.t + k.dur) { v = k.value; continue; }
-          v += (k.value - v) * k.ease((t - k.t) / k.dur);
-          break;
+          const until = i + 1 < keys.length && keys[i + 1].t <= t ? keys[i + 1].t : t;
+          v = k.dur <= 0 || until >= k.t + k.dur ? k.value : v + (k.value - v) * k.ease((until - k.t) / k.dur);
         }
         apply(v);
       },
@@ -420,8 +422,8 @@
       if (nd.desc) text.appendChild(el('div', 'desc', nd.desc));
       shrinkTo(text, nw - 36, nh - 22, 15);
       if (text.scrollWidth > nw - 34 || text.offsetHeight > nh - 20) {
-        problem(`the text of the node "${nd.id}" does not fit its box even at the smallest size, so it runs over the edge; ` +
-          `shorten its label${nd.desc ? ' or its "desc"' : ''}`, true);
+        problem(`the text of the node "${nd.id}" does not fit its box even at the smallest size, so it would run over the edge; ` +
+          `shorten its label${nd.desc ? ' or its "desc"' : ''}`);
       }
       return { cx, cy, layer: nd.at[0], slot: nd.at[1], a: anim(box, { o: 0, s: 0.94 }), ring: fadeTrack(ring),
         box: [cx - nw / 2, cy - nh / 2, cx + nw / 2, cy + nh / 2] };
@@ -446,7 +448,7 @@
       const [n, side] = key.split(':');
       const node = nodes[+n], far = side === 'far';
       list.sort((p, q) => p.slot - q.slot || p.k - q.k);
-      const room = (right ? nh : nw) - 28, gap = Math.min(38, room / Math.max(list.length, 1));
+      const room = (right ? nh : nw) - 28, gap = Math.min(right ? 38 : 64, room / Math.max(list.length, 1));
       list.forEach((p, i) => {
         const off = (i - (list.length - 1) / 2) * gap;
         ends[p.k][p.which] = right
@@ -458,26 +460,71 @@
     const bezier = (p, q, f = 0.5) => right
       ? [[p.x, p.y], [p.x + (q.x - p.x) * f, p.y], [p.x + (q.x - p.x) * f, q.y], [q.x, q.y]]
       : [[p.x, p.y], [p.x, p.y + (q.y - p.y) * f], [q.x, p.y + (q.y - p.y) * f], [q.x, q.y]];
-    // Two arrows between the same two boxes, there and back, would turn at the same place and run on top of
-    // each other. They turn at different places instead, the one on the inside of the bend first, so they
-    // never cross.
-    const turn = scene.edges.map((e, k) => {
-      const mate = e.route.length === 2 ? scene.edges.findIndex(o => o.route.length === 2 && o.from === e.to && o.to === e.from) : -1;
-      if (mate < 0) return 0.5;
-      const forward = e.route[1][0] > e.route[0][0];              // from the nearer layer to the farther one
-      const near = nodes[forward ? e.from : e.to], far = nodes[forward ? e.to : e.from];
-      const lean = Math.sign(right ? far.cy - near.cy : far.cx - near.cx);
-      if (!lean) return 0.5;
-      const port = j => { const end = ends[j][scene.edges[j].from === (forward ? e.from : e.to) ? 'start' : 'end']; return right ? end.y : end.x; };
-      const early = (port(k) > port(mate)) === (lean > 0);        // measured from the nearer box
-      return forward === early ? 0.3 : 0.7;
-    });
     const on = (c, t) => [0, 1].map(i => (1 - t) ** 3 * c[0][i] + 3 * (1 - t) ** 2 * t * c[1][i] + 3 * (1 - t) * t * t * c[2][i] + t ** 3 * c[3][i]);
-    const sample = (c, n = 18) => Array.from({ length: n + 1 }, (_, i) => on(c, i / n));
+    const sample = (c, n = 48) => Array.from({ length: n + 1 }, (_, i) => on(c, i / n));
     const curve = c => `C${c.slice(1).map(p => `${px2(p[0])} ${px2(p[1])}`).join(' ')}`;
     const HEAD = 15;
 
-    // Every arrow's path, and points along it: to see what it passes, and to find its label a place.
+    // Where every arrow goes through: its two ends, and across a layer it only passes, the two sides of the empty
+    // place kept for it there. It runs straight through that place and bends only in the gaps, where no box is.
+    const stopsOf = scene.edges.map((e, k) => {
+      if (e.route.length < 2) return null;
+      const s = e.route[e.route.length - 1][0] > e.route[0][0] ? 1 : -1;
+      const stops = [ends[k].start];
+      for (const point of e.route.slice(1, -1)) {
+        const [x, y] = centre(point), half = (right ? nw : nh) / 2 + 10;
+        stops.push(right ? { x: x - s * half, y, straight: true } : { x, y: y - s * half, straight: true });
+        stops.push(right ? { x: x + s * half, y } : { x, y: y + s * half });
+      }
+      stops.push(ends[k].end);
+      return stops;
+    });
+    // Arrows that bend in the same gap would all turn half-way across it and run on top of each other there.
+    // Each turns at a place of its own instead, in an order that keeps them from crossing: of those heading the
+    // same way, the one on the inside of the bend turns first.
+    const al = p => (right ? p.x : p.y), cr = p => (right ? p.y : p.x);
+    const first = (right ? midX : midY) - (L - 1) / 2 * along, gaps = new Map();
+    stopsOf.forEach((stops, k) => {
+      if (!stops) return;
+      stops.slice(1).forEach((q, i) => {
+        const p = stops[i];
+        if (p.straight) return;
+        const near = al(p) < al(q) ? p : q, far = near === p ? q : p;
+        if (Math.abs(cr(far) - cr(near)) < 1) return;        // a straight run: nothing to turn
+        const gap = Math.round((al(near) - first - (right ? nw : nh) / 2) / along);
+        if (!gaps.has(gap)) gaps.set(gap, []);
+        gaps.get(gap).push({ k, i, from: cr(near), to: cr(far), flip: near !== p });
+      });
+    });
+    const turn = new Map();
+    for (const list of gaps.values()) {
+      const up = list.filter(g => g.to > g.from).sort((p, q) => q.from - p.from || q.to - p.to);
+      const down = list.filter(g => g.to < g.from).sort((p, q) => p.from - q.from || p.to - q.to);
+      const order = [...up, ...down];
+      order.forEach((g, j) => {
+        const f = order.length === 1 ? 0.5 : 0.28 + 0.44 * j / (order.length - 1);
+        turn.set(`${g.k}:${g.i}`, g.flip ? 1 - f : f);
+      });
+    }
+    // Points every few pixels along a path: to see what it passes, where two paths run together, and where a label can go.
+    const every = (pts, step = 7) => {
+      const out = [pts[0]];
+      let left = step;
+      for (let i = 1; i < pts.length; i++) {
+        let [x, y] = pts[i - 1];
+        let d = Math.hypot(pts[i][0] - x, pts[i][1] - y);
+        while (d >= left) {
+          const t = left / d;
+          x += (pts[i][0] - x) * t; y += (pts[i][1] - y) * t;
+          out.push([x, y]);
+          d -= left; left = step;
+        }
+        left -= d;
+      }
+      out.push(pts[pts.length - 1]);
+      return out;
+    };
+
     const lines = scene.edges.map((e, k) => {
       let d, tip, dir, pts;
       if (e.route.length < 2) {                         // an arrow from a box to itself: a loop on a side with no neighbour
@@ -496,16 +543,7 @@
         d = `M${px2(c[0][0])} ${px2(c[0][1])} ${curve(c)}`;
         pts = sample(c, 24);
       } else {
-        // Across a layer it only passes, an arrow runs straight through the empty place kept for it there, from
-        // one side of that column to the other: so it bends only in the gaps, where there are no boxes.
-        const s = e.route[e.route.length - 1][0] > e.route[0][0] ? 1 : -1;
-        const stops = [ends[k].start];
-        for (const point of e.route.slice(1, -1)) {
-          const [x, y] = centre(point), half = (right ? nw : nh) / 2 + 10;
-          stops.push(right ? { x: x - s * half, y, straight: true } : { x, y: y - s * half, straight: true });
-          stops.push(right ? { x: x + s * half, y } : { x, y: y + s * half });
-        }
-        stops.push(ends[k].end);
+        const stops = stopsOf[k].slice();
         const last = stops[stops.length - 1], prev = stops[stops.length - 2];
         const sign = Math.sign((right ? last.x - prev.x : last.y - prev.y) || 1);
         dir = right ? [sign, 0] : [0, sign];
@@ -519,7 +557,7 @@
             d += ` L${px2(q.x)} ${px2(q.y)}`;
             for (let j = 1; j <= 8; j++) pts.push([p.x + (q.x - p.x) * j / 8, p.y + (q.y - p.y) * j / 8]);
           } else {
-            const c = bezier(p, q, turn[k]);
+            const c = bezier(p, q, turn.get(`${k}:${i}`) || 0.5);
             d += ` ${curve(c)}`;
             pts.push(...sample(c));
           }
@@ -531,8 +569,24 @@
         problem(`the arrow from "${name(e.from)}" to "${name(e.to)}" would pass behind "${name(behind)}" and look joined to it; ` +
           'list the nodes in another order, or show the diagram in two scenes');
       }
-      return { d, tip, dir, pts };
+      return { d, tip, dir, pts: every(pts) };
     });
+    // Two arrows drawn along the same line for a stretch read as one arrow, from the start of one to the end of the other.
+    let merged = false;
+    lines.forEach((p, j) => lines.forEach((q, k) => {
+      if (merged || k <= j) return;
+      let run = 0, most = 0;
+      for (const [x, y] of p.pts) {
+        run = q.pts.some(([u, v]) => Math.abs(u - x) < 5 && Math.abs(v - y) < 5) ? run + 1 : 0;
+        most = Math.max(most, run);
+      }
+      if (most * 7 >= 56) {
+        merged = true;
+        problem(`the arrow from "${name(scene.edges[j].from)}" to "${name(scene.edges[j].to)}" and the arrow from "${name(scene.edges[k].from)}" to ` +
+          `"${name(scene.edges[k].to)}" would run along the same line for a stretch and read as one arrow; list the nodes in another order, ` +
+          'or show the diagram in two scenes');
+      }
+    }));
 
     // A label sits on its own arrow where that covers nothing else: no box, no other label, no other arrow,
     // and not so much of its own arrow that the arrow is lost. Failing that it goes just beside the arrow.
@@ -552,7 +606,7 @@
         if (r[0] < 8 || r[2] > G.W - 8 || r[1] < top - 24 || r[3] > G.bottom) cost += 100;
         if (nodes.some(n => hit(r, n.box, 4))) cost += 100;
         if (taken.some(q => hit(r, q, 5))) cost += 100;
-        if (lines.some((o, j) => j !== k && (o.pts.some(pt => holds(r, pt, beside ? 9 : 3)) || holds(r, o.tip, 9)))) cost += 50;
+        if (lines.some((o, j) => j !== k && (o.pts.some(pt => holds(r, pt, beside ? 20 : 5)) || holds(r, o.tip, 12)))) cost += 50;
         const seen = g.pts.filter(pt => !holds(r, pt, 2)).length / g.pts.length * length;
         if (seen < 40 || holds(r, g.tip, 10)) cost += 60;       // it would hide its own arrow, or the arrow's head
         if (!best || cost < best.cost) best = { cost, r };
@@ -565,9 +619,9 @@
         }
       }
       if (best.cost >= 50) {
-        problem(`the label "${tag.textContent}" on the arrow from "${name(e.from)}" to "${name(e.to)}" has no clear place: wherever it goes it ` +
-          'covers a box, another label, another arrow or its own. Shorten it or leave it out' +
-          (right && e.route.length > 1 ? ', or draw the diagram with "direction": "down", where labels have more room' : ''));
+        problem(`the label "${e.plain}" on the arrow from "${name(e.from)}" to "${name(e.to)}" has no clear place: wherever it goes it ` +
+          'covers a box, another label or its own arrow, or lies nearer another arrow than its own. Shorten it or leave it out' +
+          (right && e.route.length > 1 && scene.other_fits ? ', or draw the diagram with "direction": "down", where labels have more room' : ''));
       }
       taken.push(best.r);
       tag.style.left = `${px2(best.r[0])}px`;
@@ -686,11 +740,18 @@
     };
 
     let row = [];
-    const arrange = (t, next, dur) => {                   // everyone in `next` goes to their place; the labels follow the row
+    const arrange = (t, next, dur, makesRoom = false) => {  // everyone in `next` goes to their place; the labels follow the row
       const len = next.length;
       next.forEach((id, i) => {
         const c = cells.get(id), x = xAt(i, len);
-        if (c.x === null) { c.a.x.to(Math.max(t - 0.01, 0), x, 0); c.x = x; c.a.o.to(t, 1, 0.4); c.a.y.to(t, 0, 0.45); }
+        if (c.x === null) {
+          // A new cell at the end starts where that place is now and moves with the row. One put between
+          // others waits until they have moved apart, or it would arrive on top of the cell that is leaving its place.
+          const between = makesRoom && i < len - 1, from = between ? x : xAt(i, row.length), at = t + (between ? dur * 0.7 : 0);
+          c.a.x.to(Math.max(t - 0.01, 0), from, 0);
+          if (from !== x) c.a.x.to(t, x, dur, easeInOut);
+          c.x = x; c.a.o.to(at, 1, 0.35); c.a.y.to(at, 0, 0.4);
+        }
         else if (c.x !== x) { c.a.x.to(t, x, dur, easeInOut); c.x = x; }
       });
       idx.forEach((tr, i) => { tr.x.to(t, xAt(i, len), dur, easeInOut); tr.o.to(t, i < len ? 1 : 0, 0.3); });
@@ -718,7 +779,7 @@
         if (op.verb === 'swap' || op.verb === 'move') {     // the cells that travel lift over the others on their way
           for (const id of op.moved) { const c = cells.get(id); c.a.y.to(op.t, -ch * 0.62, 0.22); c.a.y.to(op.t + 0.34, 0, 0.26); }
         }
-        arrange(op.t + (op.leave !== undefined && op.enter === undefined ? 0.18 : 0.02), op.row, 0.55);
+        arrange(op.t + (op.leave !== undefined && op.enter === undefined ? 0.18 : 0.02), op.row, 0.55, op.verb === 'insert' || op.verb === 'push');
       } else if (op.op === 'mark') {
         for (const [id, c] of cells) c.mark.to(op.t, op.cells.includes(id) ? 1 : 0, 0.25);
       } else if (op.op === 'pointers') {
@@ -745,9 +806,54 @@
     const n = scene.actors.length, m = scene.messages.length;
     const col = W / n, bw = Math.min(300, col - 28), bh = 66;
     const xOf = i => G.padX + col * (i + 0.5);
-    const rowH = Math.min(G === FORMATS.tall ? 92 : 78, (G.bottom - top - bh - 46) / m);
-    const yOf = k => top + bh + 30 + rowH * (k + 0.72);
-    const foot = yOf(m - 1) + 30;
+    const HEAD = 14;
+
+    // First the labels, because a row is as tall as its label needs: one line, two lines, or a formula.
+    const made = scene.messages.map((msg, k) => {
+      const a = xOf(msg.from), z = xOf(msg.to), self = msg.from === msg.to;
+      // A message to oneself loops out to the right. On the last party the frame ends there, so it loops left.
+      const out = self && n > 1 && msg.from === n - 1 ? -1 : 1;
+      const tag = root.appendChild(el('div', 'mlabel', msg.label));
+      const math = !!tag.querySelector('.katex');
+      if (math) tag.classList.add('math');                 // a formula is not clamped to two lines of text
+      const room = Math.max(self ? (out > 0 ? G.W - G.padX - a : a - G.padX) - 80 : Math.abs(z - a) - 30, 80);
+      tag.style.maxWidth = `${px2(room)}px`;
+      if (self) tag.style.textAlign = out > 0 ? 'left' : 'right';
+      // A label that does not fit in two lines is set smaller; one that still does not fit would be cut, and a
+      // cut label can say the opposite of the whole one, so the check stops there.
+      let font = parseFloat(getComputedStyle(tag).fontSize);
+      const cut = () => tag.scrollWidth > tag.clientWidth + 1 ||
+        (math ? tag.offsetHeight > font * 3.6 : tag.scrollHeight > tag.clientHeight + 1);
+      while (font > 18 && cut()) { font -= 1; tag.style.fontSize = `${font}px`; }
+      if (cut()) {
+        const probe = root.appendChild(el('div', 'mlabel', msg.plain));
+        probe.style.cssText = `font-size:${font}px; white-space:nowrap; display:inline-block; max-width:none;`;
+        const per = probe.getBoundingClientRect().width / Math.max(msg.plain.length, 1);
+        probe.remove();
+        const line = Math.max(4, Math.floor(room / per)), longest = Math.max(...msg.plain.split(' ').map(w => w.length));
+        problem(`message ${k + 1}, "${msg.plain}", does not fit ${self ? 'beside its party' : 'between its two parties'} and would be cut off; ` +
+          (longest > line ? `its longest word has ${longest} characters and about ${line} fit on a line there`
+            : `about ${line} characters fit on a line there, and a label has two lines`) +
+          (self ? '' : '; shorten it, or put the two parties further apart'));
+      }
+      const r = tag.getBoundingClientRect();
+      return { msg, a, z, self, out, tag, w: r.width, h: r.height, need: self ? Math.max(r.height, 32) + 16 : r.height + 20 };
+    });
+    // Rows are their usual height where there is room; where there is not, each still gets what its label
+    // needs. When even that is more than the frame has, labels would lie over the arrows above them.
+    const usual = G === FORMATS.tall ? 92 : 78, start = top + bh + 24, avail = G.bottom - start - 22;
+    const needed = made.reduce((sum, r) => sum + r.need, 0);
+    let heights = made.map(r => Math.max(r.need, usual));
+    if (heights.reduce((p, q) => p + q, 0) > avail) heights = made.map(r => r.need + Math.max(avail - needed, 0) / m);
+    if (needed > avail + 1) {
+      heights = made.map(r => r.need * avail / needed);
+      problem(`the ${m} messages need more height than the frame has under this heading (a label of two lines takes a row and a half): ` +
+        'shorten labels to one line, show fewer messages, or leave out the "sub"');
+    }
+    let rowTop = start;
+    made.forEach((r, k) => { r.y = r.self ? rowTop + heights[k] / 2 : rowTop + heights[k] - 8; rowTop += heights[k]; });
+    const foot = rowTop + 14;
+
     scene.actors.forEach((name, i) => {
       const box = root.appendChild(el('div', 'actor', name));
       box.style.cssText = `left:${px2(xOf(i) - bw / 2)}px; top:${px2(top)}px; width:${px2(bw)}px; height:${bh}px;`;
@@ -757,12 +863,10 @@
       const line = svgEl('line', { class: 'life', x1: px2(xOf(i)), x2: px2(xOf(i)), y1: px2(top + bh), y2: px2(foot) }, svg);
       fadeTrack(line).to(0.3 + i * 0.06, 1, 0.5);
     });
-    const HEAD = 14;
-    const rows = scene.messages.map((msg, k) => {
-      const y = yOf(k), a = xOf(msg.from), z = xOf(msg.to), self = msg.from === msg.to;
+
+    const rows = made.map((r, k) => {
+      const { msg, a, z, self, out, tag, y } = r;
       const g = svgEl('g', { class: `msg${msg.reply ? ' reply' : ''}` }, svg);
-      // A message to oneself loops out to the right. On the last party the frame ends there, so it loops left.
-      const out = self && n > 1 && msg.from === n - 1 ? -1 : 1;
       const dir = self ? -out : Math.sign(z - a);
       const d = self
         ? `M${px2(a)} ${px2(y - 16)} H${px2(a + out * 62)} V${px2(y + 12)} H${px2(a + out * HEAD)}`
@@ -771,22 +875,12 @@
       const head = `M${px2(tipX)} ${px2(tipY)} L${px2(tipX - dir * HEAD)} ${px2(tipY - HEAD * 0.5)} L${px2(tipX - dir * HEAD)} ${px2(tipY + HEAD * 0.5)} Z`;
       const line = svgEl('path', { class: 'line', d, ...(msg.reply ? {} : { pathLength: 1 }) }, g);   // a reply is dashed, so it fades in
       const tip = svgEl('path', { class: 'head', d: head }, g);
-      const tag = root.appendChild(el('div', 'mlabel', msg.label));
-      const room = Math.max(self ? (out > 0 ? G.W - G.padX - a : a - G.padX) - 80 : Math.abs(z - a) - 30, 80);
-      tag.style.maxWidth = `${px2(room)}px`;
-      if (self) tag.style.textAlign = out > 0 ? 'left' : 'right';
-      // A label that does not fit in two lines is set smaller; one that still does not fit would be cut, and a
-      // cut label can say the opposite of the whole one, so the check stops there.
-      let font = parseFloat(getComputedStyle(tag).fontSize);
-      const cut = () => tag.scrollHeight > tag.clientHeight + 1 || tag.scrollWidth > tag.clientWidth + 1;
-      while (font > 18 && cut()) { font -= 1; tag.style.fontSize = `${font}px`; }
-      if (cut()) {
-        problem(`message ${k + 1}, "${tag.textContent}", does not fit ${self ? 'beside its party' : 'between its two parties'} and would be cut off; ` +
-          `shorten it to about ${Math.max(8, Math.floor(room / (font * 0.52) * 1.8))} characters` + (self ? '' : ', or put the two parties further apart'));
-      }
-      const r = tag.getBoundingClientRect();
-      tag.style.left = `${px2(self ? (out > 0 ? a + 74 : a - 74 - r.width) : (a + z) / 2 - r.width / 2)}px`;
-      tag.style.top = `${px2(self ? y - r.height / 2 - 2 : y - r.height - 7)}px`;
+      const left = self ? (out > 0 ? a + 74 : a - 74 - r.w) : (a + z) / 2 - r.w / 2;
+      const topY = self ? y - r.h / 2 - 2 : y - r.h - 7;
+      tag.style.left = `${px2(left)}px`;
+      tag.style.top = `${px2(topY)}px`;
+      r.label = [left, topY, left + r.w, topY + r.h];
+      r.arrow = self ? [Math.min(a, a + out * 62) - 2, y - 18, Math.max(a, a + out * 62) + 2, y + 14] : [Math.min(a, z), y - 5, Math.max(a, z), y + 5];
       const lit = switcher(false, v => { g.classList.toggle('lit', v); tag.classList.toggle('lit', v); });
       return {
         draw: track(0, v => {                              // nothing at all before it starts: a round cap would leave a dot
@@ -796,6 +890,16 @@
         tip: fadeTrack(tip), tag: anim(tag, { o: 0, y: 8 }), lit,
       };
     });
+    // A label has a background, so one that lies over another message would blot it out.
+    const over = (p, q) => p[0] < q[2] - 1 && p[2] > q[0] + 1 && p[1] < q[3] - 1 && p[3] > q[1] + 1;
+    let covered = false;
+    made.forEach((r, k) => made.forEach((o, j) => {
+      if (covered || j === k) return;
+      if (over(r.label, o.arrow) || (j > k && over(r.label, o.label))) {
+        covered = true;
+        problem(`the label of message ${k + 1}, "${r.msg.plain}", lies over message ${j + 1}; shorten labels to one line, or show fewer messages`);
+      }
+    }));
     for (const op of scene.ops) {
       if (op.op === 'reveal') {
         const r = rows[op.message];
@@ -830,16 +934,18 @@
       probe.style.cssText = 'overflow:visible; width:auto;';
       const made = list.map(([x, text]) => { probe.textContent = text; return { x, text, w: Math.min(probe.getBoundingClientRect().width + 4, most), full: probe.getBoundingClientRect().width }; });
       probe.remove();
+      // Counted back from the last one, so the end of the axis keeps its label.
+      const keeps = st => made.filter((_, i) => (made.length - 1 - i) % st === 0);
+      const clash = st => { const kept = keeps(st); return kept.some((m, i) => i && m.x - kept[i - 1].x < (m.w + kept[i - 1].w) / 2 + 16); };
       let step = 1;
-      const clash = st => { const kept = made.filter((_, i) => i % st === 0); return kept.some((m, i) => i && m.x - kept[i - 1].x < (m.w + kept[i - 1].w) / 2 + 16); };
       while (step < made.length && clash(step)) step++;
       made.forEach((m, i) => {
-        if (i % step) return;
+        if ((made.length - 1 - i) % step) return;
         const tick = root.appendChild(el('div', 'tick', m.text));
         tick.style.cssText = `left:${px2(Math.min(Math.max(m.x - m.w / 2, 4), G.W - m.w - 4))}px; top:${px2(y)}px; width:${px2(m.w)}px;`;
         enter(tick, 0.35, 0, 0.4);
       });
-      const cut = made.find((m, i) => i % step === 0 && m.full > most + 1);
+      const cut = made.find((m, i) => (made.length - 1 - i) % step === 0 && m.full > most + 1);
       if (cut) problem(`the name "${cut.text}" along the bottom of the chart is too long for its place and ends in "…"`, true);
     };
 
@@ -923,14 +1029,19 @@
 
     // A line chart: the rows in the file's order along x, a line for each column of numbers.
     const xs = scene.x;
-    const x0 = G.padX + 110, x1 = G.W - G.padX - 40, yTop = y0 + 16, yBottom = G.bottom - 92;
+    const wide = root.appendChild(el('div', 'tick left'));  // the numbers up the side are given the width they need
+    wide.style.cssText = 'width:auto; overflow:visible;';
+    let tickW = 0;
+    for (const [, text] of axis.ticks) { wide.textContent = text; tickW = Math.max(tickW, wide.getBoundingClientRect().width); }
+    wide.remove();
+    const x0 = G.padX + Math.max(110, tickW + 24), x1 = G.W - G.padX - 40, yTop = y0 + 16, yBottom = G.bottom - 92;
     const xOf = v => x0 + (xs.max === xs.min ? 0.5 : (v - xs.min) / (xs.max - xs.min)) * (x1 - x0);
     const yOf = v => yBottom - (v - axis.min) / span * (yBottom - yTop);
     for (const [v, text] of axis.ticks) {
       const line = svgEl('line', { class: v === 0 ? 'base' : 'grid', x1: px2(x0), x2: px2(x1), y1: px2(yOf(v)), y2: px2(yOf(v)) }, svg);
       fadeTrack(line).to(0.3, 1, 0.4);
       const tick = root.appendChild(el('div', 'tick left', text));
-      tick.style.cssText = `left:${px2(G.padX)}px; top:${px2(yOf(v) - 16)}px; width:96px;`;
+      tick.style.cssText = `left:${px2(G.padX)}px; top:${px2(yOf(v) - 16)}px; width:${px2(x0 - G.padX - 14)}px;`;
       enter(tick, 0.35, 0, 0.4);
     }
     for (const [v] of xs.ticks) svgEl('line', { class: 'nick', x1: px2(xOf(v)), x2: px2(xOf(v)), y1: px2(yBottom), y2: px2(yBottom + 8) }, svg);

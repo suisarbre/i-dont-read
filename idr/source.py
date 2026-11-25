@@ -117,6 +117,7 @@ def _decode(data: bytes, name: str, encoding: str | None = None) -> str:
     except (UnicodeDecodeError, LookupError):
         raise ValueError(f'{name} is not {encoding or "UTF-8"} text. If it is in another encoding, '
                          f'name it in the scene, for example "encoding": "cp949"') from None
+    text = text.lstrip("\ufeff")                          # a byte-order mark is not part of the first cell
     if "\x00" in text:                                   # UTF-16 with no byte-order mark reads as UTF-8 full of NULs
         raise ValueError(f"{name} holds NUL characters, so it is not {encoding or 'UTF-8'} text. If it is UTF-16, "
                          'name it in the scene: "encoding": "utf-16-le"')
@@ -349,7 +350,7 @@ def tex_macros(root: Path, file: str, ref: str | None = None, encoding: str | No
 _TABULAR = re.compile(r"\\begin\{(tabular\*?|tabularx|longtable|array)\}(.*?)\\end\{\1\}", re.S)
 _RULES = re.compile(r"\\(?:hline|toprule|midrule|bottomrule|endhead|endfirsthead|endfoot|endlastfoot|addlinespace)(?![A-Za-z])"
                     r"(?:\[[^\]]*\])?|\\(?:cline|cmidrule)(?:\([^)]*\))?\{[^{}]*\}")
-_PLAIN_COMMANDS = re.compile(r"\\(?:textbf|textit|emph|textrm|textsf|texttt|textsc|mathrm|text|mbox|underline)\s*\{([^{}]*)\}")
+_PLAIN_COMMANDS = re.compile(r"\\(?:textbf|textit|emph|textrm|textsf|texttt|textsc|mathrm|text|mbox|underline|num)\s*\{([^{}]*)\}")
 
 
 def _outside_math(text: str, change) -> str:
@@ -368,14 +369,19 @@ def _tex_cell(cell: str, where: str) -> str:
     def plain(text: str) -> str:
         for _ in range(4):
             text = _PLAIN_COMMANDS.sub(r"\1", text)
+        text = re.sub(r"\{\s*\\(?:bf|bfseries|it|itshape|em)\b\s*([^{}]*)\}", r"\1", text)      # {\bf 93.1}
+        text = re.sub(r"\\(?:bf|bfseries|it|itshape|em)\b\s*", "", text)
         text = re.sub(r"\\([%&_#{}])", r"\1", text).replace("~", " ").replace("---", "—").replace("--", "–")
+        text = re.sub(r"(?<=\d)\\,(?=\d{3})", "\u2009", text)     # 12\,345: a thin space between groups of digits, as printed
         text = re.sub(r"\\[,;! ]", " ", text)
         left = re.search(r"\\[A-Za-z]+", text)
         if left:
             raise ValueError(f"{where}: a cell uses {left.group(0)}, which a table scene cannot show as the paper "
                              'prints it; write the table out with "header" and "rows", and name the paper in "source"')
         return text.replace("{", "").replace("}", "")
-    cell = " ".join(_outside_math(cell.strip(), plain).split())
+    # \textbf{$93.1$}: the bold is dropped like any other, and the math inside is left to be read as math.
+    cell = re.sub(r"\\(?:textbf|textit|emph|underline|textrm|textsf)\s*\{\s*(\$[^$]*\$)\s*\}", r"\1", cell.strip())
+    cell = " ".join(part for part in re.split(r"[ \t\n]+", _outside_math(cell, plain)) if part)
     number = re.fullmatch(r"\$\s*([-+]?)\s*(\d[\d,]*(?:\.\d+)?)\s*\$", cell)
     if number:                                             # $-0.8$ is how LaTeX writes a minus sign: the same number, as text
         return ("−" if number.group(1) == "-" else number.group(1)) + number.group(2)
@@ -487,6 +493,9 @@ def _cell(raw: str) -> str:
     mark = re.fullmatch(r"(\s*[^*\s][^*]*?)((?:\\?\*){1,3}|[†‡§])\s*", raw)
     if mark:
         return clean(mark.group(1)) + mark.group(2).replace("\\", "")
+    mark = re.fullmatch(r"\s*((?:\\?\*){1,3}|[†‡§])([^*\s][^*]*?)\s*", raw)      # "*12": the mark comes first
+    if mark:
+        return mark.group(1).replace("\\", "") + clean(mark.group(2))
     return clean(raw)
 
 
@@ -535,6 +544,13 @@ def csv_table(root: Path, file: str, first: int, last: int, columns: list | None
     if not table:
         raise ValueError(f"{file} is empty")
     header, body = [c.strip() for c in table[0]], table[1:]
+    if len(header) == 1 and not file.lower().endswith(".tsv") and any(mark in header[0] for mark in ";\t|"):
+        used = next(mark for mark in ";\t|" if mark in header[0])
+        raise ValueError(f"{file} separates its columns with {'tabs' if used == chr(9) else repr(used)}, not commas, so it "
+                         "reads as one column; a .csv is read by commas and a .tsv by tabs")
+    if header[0].startswith("#") and body and len(body[0]) != len(header):
+        raise ValueError(f"{file} starts with a comment line ({table[0][0][:30]!r}), which is taken for the header; "
+                         "a table file is read from its first line")
     if not (1 <= first <= last <= len(body)):
         raise ValueError(f"{file} has {len(body)} data rows; cannot show rows {first}-{last}")
     if columns:

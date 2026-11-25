@@ -139,9 +139,11 @@ def layout(ids: list[str], edges: list[tuple[str, str]]) -> dict:
 def _diagram(b, spec: dict, kicker: str) -> plan.Scene:
     where = spec.get("heading") or "diagram"
     plan._only(spec, {"type", "heading", "sub", "beyond", "math", "beats", "nodes", "edges", "direction"}, "a diagram scene", where)
-    if not isinstance(spec["nodes"], list) or not isinstance(spec.get("edges") or [], list):
+    if not isinstance(spec["nodes"], list) or not isinstance(spec.get("edges", []), list):
         raise StoryboardError(f'{where}: "nodes" and "edges" are lists of objects')
-    nodes, edges = ([dict(x) if isinstance(x, dict) else x for x in given] for given in (spec["nodes"], spec.get("edges") or []))
+    if "direction" in spec and spec["direction"] not in ("right", "down"):
+        raise StoryboardError(f'{where}: "direction" is "right" or "down", not {spec["direction"]!r}')
+    nodes, edges = ([dict(x) if isinstance(x, dict) else x for x in given] for given in (spec["nodes"], spec.get("edges", [])))
     _beats(spec, "a diagram", where)
     if not 2 <= len(nodes) <= MAX_NODES:
         raise StoryboardError(f"{where}: a diagram shows 2 to {MAX_NODES} nodes, not {len(nodes)}; "
@@ -203,10 +205,13 @@ def _diagram(b, spec: dict, kicker: str) -> plan.Scene:
         if len(node["label"]) > limit:
             b.warn(where, f"node label {node['label']!r} is over {limit} characters and may wrap")
     on = plan._math_on(b, spec)
+    turned = ROOM[(b.fmt, "down" if direction == "right" else "right")]
     scene = b.scene("diagram", kicker, spec, direction=direction, layers=placed["layers"], across=placed["across"],
+                    other_fits=placed["layers"] <= turned[0] and placed["across"] <= turned[1],
                     nodes=[{"id": name, "label": b.rich(node["label"], on, where), "desc": b.rich(node.get("desc"), on, where),
                             "at": list(placed["nodes"][name])} for name, node in zip(ids, nodes)],
                     edges=[{"from": ids.index(a), "to": ids.index(z), "label": b.rich(edge.get("label"), on, where),
+                            "plain": edge.get("label"),
                             "dashed": bool(edge.get("dashed")), "route": [list(p) for p in route], "back": back}
                            for (a, z), edge, route, back in zip(pairs, edges, placed["routes"], placed["back"])])
     scene.sfx.append((0.0, "whoosh"))
@@ -275,7 +280,7 @@ def _diagram(b, spec: dict, kicker: str) -> plan.Scene:
     first = min(seen.values(), default=0.0)
     if first > plan.LEAD + 1.0:
         b.warn(where, f"nothing is on screen for the first {first:.1f} seconds; reveal the first node when the first sentence starts")
-    clock.finish(minimum=max(op["t"] for op in ops) + 0.9)      # the last arrow has been drawn before the scene ends
+    clock.finish(minimum=max(op["t"] for op in ops) + 1.5)      # the last arrow has been drawn, and seen, before the scene ends
     return scene
 
 
@@ -321,9 +326,9 @@ def _array(b, spec: dict, kicker: str) -> plan.Scene:
         # The frame is a hard limit. "capacity" is the limit the code keeps: a row may go past it for a moment,
         # as code that stores and then evicts does, and the cells past the last slot show that. It has to be
         # back within it by the end of the scene.
-        if len(row) > room:
+        if len(row) > room + (1 if capacity else 0):      # one cell past a full row of slots still fits, drawn smaller
             raise StoryboardError(f"{where}: the row would hold {len(row)} cells, and a {b.fmt} frame has room for "
-                                  f"{room}: show fewer, or split the scene")
+                                  f"{room}{' (and one more past its last slot)' if capacity else ''}: show fewer, or split the scene")
 
     full_check()
 
@@ -333,6 +338,8 @@ def _array(b, spec: dict, kicker: str) -> plan.Scene:
     def place(given, what: str, extra: int = 0) -> int:
         """An index into the row: a number from 0, "front", "back", or {"value": text} for the one cell that holds it."""
         size = len(row) + extra
+        if given in ("front", "back") and not size:
+            raise StoryboardError(f"{where}: {what} is the {given} of the row, but the row is empty at that point")
         if given == "front":
             return 0
         if given == "back":
@@ -383,11 +390,16 @@ def _array(b, spec: dict, kicker: str) -> plan.Scene:
             if "to" not in op:
                 raise StoryboardError(f'{where}: "move" needs "to": where the cell goes, as in {{"move": 1, "to": "back"}}')
             was = place(op["move"], '"move"')
+            before = f"[{', '.join(name(i) for i in range(len(row)))}]"
             cell = row.pop(was)
+            if isinstance(op["to"], dict) and str(op["to"].get("value")) == cells[cell]["text"]:
+                raise StoryboardError(f'{where}: "move": "to" names {cells[cell]["text"]!r}, the cell that is being moved; '
+                                      f'give where it goes: an index, "front", "back", or another cell\'s value. The row is {before}')
             row.insert(place(op["to"], '"move": "to"', extra=1), cell)
             if row.index(cell) == was:
-                raise StoryboardError(f"{where}: \"move\" would leave {cells[cell]['text']!r} where it is (index {was}); "
-                                      f"the row is [{', '.join(name(i) for i in range(len(row)))}]")
+                raise StoryboardError(f"{where}: \"move\" would leave {cells[cell]['text']!r} where it is (index {was}); the "
+                                      f"row is {before}. To show that the code ran and nothing moved, leave out the "
+                                      '"do" and "mark" the cell instead')
             change["moved"] = [cell]
         elif verb == "swap":
             pair = op["swap"]
@@ -395,7 +407,9 @@ def _array(b, spec: dict, kicker: str) -> plan.Scene:
                 raise StoryboardError(f'{where}: "swap" takes two places, as in {{"swap": [0, 3]}}; not {pair!r}')
             i, j = place(pair[0], '"swap"'), place(pair[1], '"swap"')
             if i == j:
-                raise StoryboardError(f'{where}: "swap" needs two different cells')
+                raise StoryboardError(f'{where}: "swap" needs two different cells, and both places are index {i} of '
+                                      f"[{', '.join(name(k) for k in range(len(row)))}]. To show that the code ran and nothing "
+                                      'moved, leave out the "do" and "mark" the cell instead')
             row[i], row[j] = row[j], row[i]
             change["moved"] = [row[i], row[j]]
         else:
@@ -403,7 +417,9 @@ def _array(b, spec: dict, kicker: str) -> plan.Scene:
                 raise StoryboardError(f'{where}: "set" needs "to": the new content, as in {{"set": 1, "to": "z"}}')
             cell = row[place(op["set"], '"set"')]
             if text(op["to"]) == cells[cell]["text"]:
-                raise StoryboardError(f"{where}: \"set\" would write {cells[cell]['text']!r} over the same text; nothing would change")
+                raise StoryboardError(f"{where}: \"set\" would write {cells[cell]['text']!r} over the same text in "
+                                      f"[{', '.join(name(k) for k in range(len(row)))}]; nothing would change. To show that the "
+                                      'code ran, leave out the "do" and "mark" the cell instead')
             cells.append({"id": len(cells), "text": text(op["to"])})      # the new content is a new cell in the old one's place
             row[row.index(cell)] = cells[-1]["id"]
             change["leave"], change["enter"] = cell, cells[-1]["id"]
@@ -416,7 +432,7 @@ def _array(b, spec: dict, kicker: str) -> plan.Scene:
     scene.sfx.append((0.0, "whoosh"))
     ops = scene.payload["ops"]
     clock = plan._Clock(b, scene, where)
-    marked, pointed = [], {}
+    marked, pointed, late = [], {}, False
     free = 0.0                 # when the last operation has landed. The player replays what happens in order of
     for beat in spec.get("beats", []):     # time, so nothing may be timed before an operation worked out ahead of it.
         acts = clock.beat(beat)
@@ -431,10 +447,15 @@ def _array(b, spec: dict, kicker: str) -> plan.Scene:
                 given = act["do"] if isinstance(act["do"], list) else [act["do"]]
                 if not given:
                     raise StoryboardError(f'{where}: "do" takes an operation such as {{"push": "d"}}, or a list of them; it is empty')
-                for op in given:
+                for j, op in enumerate(given):
                     if not isinstance(op, dict):
                         raise StoryboardError(f'{where}: "do" takes an operation such as {{"push": "d"}}, or a list of them; not {op!r}')
                     at = round(max(t + 0.05, free), 3)
+                    if j == 0 and at > t + 0.7 and not late:  # queued behind an earlier beat or cue: the picture is behind the words
+                        late = True
+                        b.warn(where, f"in the sentence {str(beat.get('say'))[:40]!r}..., an operation happens {at - t:.1f} s "
+                               "after the word it belongs to, because the ones before it are still moving (each takes "
+                               "0.7 s); give the operations more words between them, or a beat each")
                     ops.append({"op": "change", "t": at, **apply(op)})
                     scene.sfx.append((at, "pop" if "enter" in ops[-1] else "tick"))
                     free, did = at + 0.7, True
@@ -515,6 +536,7 @@ def _sequence(b, spec: dict, kicker: str) -> plan.Scene:
         ends_ = [actors.index(" ".join(m[end].split())) for end in ("from", "to")]
         rows.append({"from": ends_[0], "to": ends_[1],             # whether a label fits is measured where it is drawn
                      "label": b.rich(_words(m["label"], f"the label of message {n}", where), on, where),
+                     "plain": " ".join(m["label"].split()),
                      "reply": _flag(m, "reply", "a message", where)})
     scene = b.scene("sequence", kicker, spec, actors=actors, messages=rows)
     scene.sfx.append((0.0, "whoosh"))
@@ -550,5 +572,5 @@ def _sequence(b, spec: dict, kicker: str) -> plan.Scene:
     first = min((op["t"] for op in scene.payload["ops"] if op["op"] == "reveal"), default=0.0)
     if first > plan.LEAD + 1.0:
         b.warn(where, f"nothing is on screen for the first {first:.1f} seconds; reveal the first message when the first sentence starts")
-    clock.finish(minimum=max(op["t"] for op in scene.payload["ops"]) + 0.9)   # the last message has been drawn before the end
+    clock.finish(minimum=max(op["t"] for op in scene.payload["ops"]) + 1.5)   # the last message has been drawn, and seen, before the end
     return scene
